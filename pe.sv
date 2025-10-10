@@ -23,6 +23,10 @@ module pe #(parameter int W = 8, //data width
 );
 
 
+ initial begin
+    if (ACCW < 2*W) $error("pe: ACCW (%0d) must be >= 2*W (%0d).", ACCW, 2*W);
+  end
+
 //Systolic Shift, Forwarding a and b to next PE
 always_ff @(posedge clk or negedge rst_n) begin 
 
@@ -33,7 +37,8 @@ a_out <= '0; b_out <= '0;
 end
 else begin 
 a_valid_out <= a_valid; b_valid_out <= b_valid;
-a_out <= a; b_out <= b;
+if(a_valid) a_out <= a; 
+if (b_valid) b_out <= b;
 
 end
 end
