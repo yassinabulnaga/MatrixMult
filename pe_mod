@@ -1,0 +1,116 @@
+module pe #(
+  parameter int W        = 8, // integer Width
+  parameter int ACCW     = 32, //Accumulator Width
+  parameter bit SIGNED   = 1, // Signed?
+  parameter bit PIPE_MUL = 0 //Pipeline Mult,  to meet timing 
+)(
+  input  logic               clk, 
+  input  logic               rst_n,
+
+  input  logic [W-1:0]       a,
+  input  logic [W-1:0]       b,
+  input  logic               a_valid,
+  input  logic               b_valid,
+
+  output logic [W-1:0]       a_out,
+  output logic [W-1:0]       b_out,
+  output logic               a_valid_out,
+  output logic               b_valid_out,
+
+  input  logic               acc_clear_block, //signal to clear accumulator 
+  input  logic               drain_in, 
+  output logic               drain_out,
+
+  output logic [ACCW-1:0]    acc_out,
+  output logic               acc_out_valid
+);
+
+  initial if (ACCW < 2*W) $fatal(1, "ACCW must be >= 2*W"); //Avoids Overflow (Non Synthesizable)
+
+  always_ff @(posedge clk or negedge rst_n) begin // Input Forwarding Logic
+    if (!rst_n) begin
+      a_out       <= '0;
+      b_out       <= '0;
+      a_valid_out <= 1'b0;
+      b_valid_out <= 1'b0;
+    end else begin
+      a_valid_out <= a_valid;
+      b_valid_out <= b_valid;
+      if (a_valid) a_out <= a;
+      if (b_valid) b_out <= b;
+    end
+  end
+
+  logic [2*W-1:0] prod_c; //Multiplication Logic
+  always_comb begin
+    if (SIGNED) prod_c = $signed(a) * $signed(b);
+    else        prod_c = a * b;
+  end
+
+  logic [2*W-1:0] prod_q;
+  logic [2*W-1:0] prod_for_add;
+  logic           prod_v_c, prod_v_q, prod_v_for_add;
+
+  assign prod_v_c = a_valid & b_valid;
+
+  generate
+    if (PIPE_MUL) begin : gen_pipe // If we pipeline Add a register between Mult and add
+      always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+          prod_q   <= '0;
+          prod_v_q <= 1'b0;
+        end else begin
+          prod_q   <= prod_c;
+          prod_v_q <= prod_v_c;
+        end
+      end
+      assign prod_for_add   = prod_q;
+      assign prod_v_for_add = prod_v_q;
+    end else begin : gen_no_pipe
+      assign prod_for_add   = prod_c;
+      assign prod_v_for_add = prod_v_c;
+    end
+  endgenerate
+
+  logic [ACCW-1:0] prod_ext;
+  always_comb begin //sign extension or zero extension, to match width
+    if (SIGNED)
+      prod_ext = {{(ACCW-2*W){prod_for_add[2*W-1]}}, prod_for_add};
+    else
+      prod_ext = {{(ACCW-2*W){1'b0}},               prod_for_add};
+  end
+
+  logic [ACCW-1:0] acc_q;
+  wire do_mac = prod_v_for_add & !draining; //a valid, b valid and not draining
+
+  always_ff @(posedge clk or negedge rst_n) begin //Accumulation logic 
+    if (!rst_n) begin //if reset make q 0
+      acc_q <= '0;
+    end else if (acc_clear_block) begin //if clear make q 0
+      acc_q <= '0;
+    end else if (do_mac) begin 
+      acc_q <= acc_q + prod_ext;
+    end
+  end
+
+  assign acc_out = acc_q; 
+
+  logic draining;
+  logic drain_in_q;
+
+  always_ff @(posedge clk or negedge rst_n) begin //drain forwarding logic
+    if (!rst_n) begin
+      draining <= 1'b0;
+      drain_out <= 1'b0;
+      acc_out_valid <= 1'b0;
+      drain_in_q <= 1'b0;
+    end else begin
+      drain_out <= drain_in;
+      acc_out_valid <= drain_in & ~drain_in_q;  // one-cycle pulse
+      drain_in_q <= drain_in;
+      if (drain_in) draining <= 1'b1;
+      else if (acc_clear_block) draining <= 1'b0;
+    end
+  end
+
+endmodule
