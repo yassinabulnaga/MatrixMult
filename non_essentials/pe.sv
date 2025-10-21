@@ -1,5 +1,5 @@
 
-module pe #(parameter int W = 8, //data width
+module pe0#(parameter int W = 8, //data width
          parameter int ACCW = 32, //accumulator width
          parameter bit SIGNED = 1 //signed or unsigned for multiplication
 )(
@@ -37,8 +37,8 @@ a_out <= '0; b_out <= '0;
 end
 else begin 
 a_valid_out <= a_valid; b_valid_out <= b_valid;
-if(a_valid) a_out <= a; 
-if (b_valid) b_out <= b;
+if(a_valid_out) a_out <= a; 
+if (b_valid_out)b_out <= b;
 
 end
 end
