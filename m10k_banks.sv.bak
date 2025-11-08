@@ -4,7 +4,7 @@ module m10k_banks #(
         parameter int W = 8,
         parameter int DEPTH_PER_BANK = 1024,
         parameter bit USE_BYTE_EN = 0,
-        parameter int RDW_MODE       = 2
+        parameter int RDW_MODE       = 0
 )(
         input logic clk,
         input logic rst_n,

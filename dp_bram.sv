@@ -4,7 +4,7 @@ module dp_bram #(
     parameter bit USE_BYTE_EN = 1,
     parameter int AW          = (DEPTH <= 1) ? 1 : $clog2(DEPTH),
     // 0 = WRITE_FIRST, 1 = READ_FIRST, 2 = NO_CHANGE
-    parameter int RDW_MODE    = 0
+    parameter int RDW_MODE    = 2
 )(
     input  logic              clk,
     input  logic              rst_n,
