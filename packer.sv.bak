@@ -22,11 +22,11 @@ module packer #(
     output logic                     m_last
 );
 
-  // Sim-time sanity checks
+  // Compile-time-ish checks (sim-time only)
   initial begin
-    if (W % 8 != 0)        $fatal(1, "packer: W must be a multiple of 8");
-    if (BEAT_W % 8 != 0)   $fatal(1, "packer: BEAT_W must be a multiple of 8");
-    if ((BEAT_W % W) != 0) $fatal(1, "packer: BEAT_W must be a multiple of W");
+    if (W % 8 != 0)       $fatal(1, "packer: W must be a multiple of 8");
+    if (BEAT_W % 8 != 0)  $fatal(1, "packer: BEAT_W must be a multiple of 8");
+    if ((BEAT_W % W) != 0)$fatal(1, "packer: BEAT_W must be a multiple of W");
   end
 
   localparam int BYTES_PER_ELEM = W/8;
@@ -34,13 +34,15 @@ module packer #(
   localparam int ELS_PER_BEAT   = BEAT_W / W;
 
   // Accumulators
-  logic [BEAT_W-1:0]               acc_data_q, acc_data_d;
-  logic [BYTES_PER_BEAT-1:0]       acc_strb_q, acc_strb_d;
+  logic [BEAT_W-1:0]           acc_data_q, acc_data_d;
+  logic [BYTES_PER_BEAT-1:0]   acc_strb_q, acc_strb_d;
   logic [$clog2(ELS_PER_BEAT+1)-1:0] cnt_q, cnt_d;
-  logic                            hold_full_q, hold_full_d;
-  logic                            eot_seen_q, eot_seen_d;
+  logic                        hold_full_q, hold_full_d;
 
-  // State registers
+  // End-of-transfer tracking
+  logic eot_seen_q, eot_seen_d;
+
+  // Registers
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       acc_data_q  <= '0;
@@ -59,10 +61,11 @@ module packer #(
 
   // Combinational
   always_comb begin
-    // locals (declared at top for ModelSim 2016)
+    // temp vars (must be declared at top for your tool)
     int slot;
-    int bit_base;
-    int byte_base;
+    int bit_lo, bit_hi;
+    int byte_lo, byte_hi;
+    int i;
 
     // defaults
     s_ready     = 1'b0;
@@ -77,12 +80,12 @@ module packer #(
     hold_full_d = hold_full_q;
     eot_seen_d  = eot_seen_q;
 
-    // If holding a completed beat, present it
+    // If we are holding a completed beat, just present it
     if (hold_full_q) begin
       m_valid = 1'b1;
       m_data  = acc_data_q;
       m_strb  = acc_strb_q;
-      m_last  = eot_seen_q;
+      m_last  = eot_seen_q;  // last beat if end-of-transfer detected
 
       if (m_ready) begin
         hold_full_d = 1'b0;
@@ -93,56 +96,58 @@ module packer #(
       end
 
     end else begin
-      // Free to accept upstream
+      // Can accept upstream
       s_ready = 1'b1;
 
-      // Accept an element
+      // Accept element
       if (s_valid && s_ready) begin
         slot = cnt_q;
 
-        // Compute base bit index for this element
+        // Bit range for data
         if (LSB_FIRST) begin
-          bit_base = slot * W;
+          bit_lo = slot * W;
         end else begin
-          bit_base = BEAT_W - (slot+1)*W;
+          bit_lo = BEAT_W - (slot+1) * W;
+        end
+        bit_hi = bit_lo + W - 1;
+
+        acc_data_d[bit_hi:bit_lo] = s_data;
+
+        // Byte range for strb
+        if (LSB_FIRST) begin
+          byte_lo = slot * BYTES_PER_ELEM;
+        end else begin
+          byte_lo = BYTES_PER_BEAT - (slot+1) * BYTES_PER_ELEM;
+        end
+        byte_hi = byte_lo + BYTES_PER_ELEM - 1;
+
+        for (i = byte_lo; i <= byte_hi; i = i + 1) begin
+          acc_strb_d[i] = 1'b1;
         end
 
-        // Indexed part-select: width is constant W
-        acc_data_d[bit_base +: W] = s_data;
-
-        // Compute base byte index for this element
-        if (LSB_FIRST) begin
-          byte_base = slot * BYTES_PER_ELEM;
-        end else begin
-          byte_base = BYTES_PER_BEAT - (slot+1)*BYTES_PER_ELEM;
-        end
-
-        // Indexed part-select for byte enables
-        acc_strb_d[byte_base +: BYTES_PER_ELEM] = {BYTES_PER_ELEM{1'b1}};
-
-        // Advance count
+        // Advance element count
         cnt_d = cnt_q + 1;
 
-        // Full beat just completed
+        // If we just filled the beat
         if (cnt_d == ELS_PER_BEAT) begin
           hold_full_d = 1'b1;
           if (s_last)
             eot_seen_d = 1'b1;
         end else begin
-          // Not full; record end-of-transfer if this was last element
+          // Not full yet; remember if this element ended the transfer
           if (s_last)
             eot_seen_d = 1'b1;
         end
       end
 
-      // Partial-beat flush when end-of-transfer seen
+      // Partial-beat flush: eot seen + some data + not already holding full
       if (!hold_full_q && eot_seen_q && (cnt_q > 0)) begin
         m_valid = 1'b1;
         m_data  = acc_data_q;
         m_strb  = acc_strb_q;
         m_last  = 1'b1;
 
-        // Block new input while we’re flushing
+        // Block new input while flushing
         s_ready = 1'b0;
 
         if (m_ready) begin
@@ -157,3 +162,4 @@ module packer #(
   end
 
 endmodule
+
