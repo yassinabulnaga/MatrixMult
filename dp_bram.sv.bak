@@ -1,11 +1,11 @@
 module dp_bram #(
-    parameter int W           = 128,
-    parameter int DEPTH       = 1024,
+    parameter int W          = 128,
+    parameter int DEPTH      = 1024,
     parameter bit USE_BYTE_EN = 1,
-    parameter int AW          = (DEPTH <= 1) ? 1 : $clog2(DEPTH),
-    // 0 = WRITE_FIRST, 1 = READ_FIRST, 2 = NO_CHANGE
-    parameter int RDW_MODE    = 0
-)(
+    parameter int AW         = (DEPTH <= 1) ? 1 : $clog2(DEPTH),
+    // 0 = WRITE_FIRST, 1 = READ_FIRST, 2 = NO_CHANGE (on write)
+    parameter int RDW_MODE   = 0
+) (
     input  logic              clk,
     input  logic              rst_n,
 
@@ -31,10 +31,9 @@ module dp_bram #(
 
   logic [W-1:0] a_q, b_q;
 
-  // Sanity checks
   initial begin
     if (USE_BYTE_EN && (W % 8) != 0)
-      $fatal(1, "dp_bram: W must be multiple of 8 when USE_BYTE_EN=1");
+      $fatal(1, "dp_bram: W must be a multiple of 8 when USE_BYTE_EN=1");
     if (RDW_MODE < 0 || RDW_MODE > 2)
       $fatal(1, "dp_bram: RDW_MODE must be 0/1/2");
   end
@@ -62,20 +61,17 @@ module dp_bram #(
     if (!rst_n) begin
       a_q <= '0;
     end else if (a_en) begin
-      automatic logic [W-1:0] prev;
-      automatic logic [W-1:0] wdata;
-
-      prev  = mem[a_addr];
-      wdata = mask_write(a_din, prev, a_be);
+      logic [W-1:0] prev   = mem[a_addr];
+      logic [W-1:0] wdata  = mask_write(a_din, prev, a_be);
 
       if (a_we)
         mem[a_addr] <= wdata;
 
       unique case (RDW_MODE)
-        0: a_q <= a_we ? wdata : prev;     // WRITE_FIRST
-        1: a_q <= prev;                    // READ_FIRST (old data)
-        2: a_q <= a_we ? a_q : prev;       // NO_CHANGE on write
-        default: a_q <= prev;
+        0: a_q <= a_we ? wdata : mem[a_addr]; // write-first
+        1: a_q <= prev;                       // read-first (old data)
+        2: a_q <= a_we ? a_q : mem[a_addr];   // no-change on write
+        default: a_q <= mem[a_addr];
       endcase
     end
   end
@@ -85,34 +81,24 @@ module dp_bram #(
     if (!rst_n) begin
       b_q <= '0;
     end else if (b_en) begin
-      automatic logic [W-1:0] prev;
-      automatic logic [W-1:0] wdata;
-
-      prev  = mem[b_addr];
-      wdata = mask_write(b_din, prev, b_be);
+      logic [W-1:0] prev   = mem[b_addr];
+      logic [W-1:0] wdata  = mask_write(b_din, prev, b_be);
 
       if (b_we)
         mem[b_addr] <= wdata;
 
       unique case (RDW_MODE)
-        0: b_q <= b_we ? wdata : prev;     // WRITE_FIRST
-        1: b_q <= prev;                    // READ_FIRST
-        2: b_q <= b_we ? b_q : prev;       // NO_CHANGE
-        default: b_q <= prev;
+        0: b_q <= b_we ? wdata : mem[b_addr];
+        1: b_q <= prev;
+        2: b_q <= b_we ? b_q : mem[b_addr];
+        default: b_q <= mem[b_addr];
       endcase
     end
   end
 
-  // Output pipeline stage (kept for timing / M10K style)
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      a_dout <= '0;
-      b_dout <= '0;
-    end else begin
-      a_dout <= a_q;
-      b_dout <= b_q;
-    end
-  end
+  // No extra pipeline: 1-cycle latency from a_q/b_q
+  assign a_dout = a_q;
+  assign b_dout = b_q;
 
 endmodule
 
