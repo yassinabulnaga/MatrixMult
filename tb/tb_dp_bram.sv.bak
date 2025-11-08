@@ -250,6 +250,7 @@ module tb_dp_bram;
     b_addr = 10'd301;
     @(posedge clk);      // b_q <= mem[301]
     @(posedge clk);      // b_dout <= b_q
+  @(posedge clk);
 
     if (b_dout !== {4{32'h89ABCDEF}}) begin
       $fatal(0,
