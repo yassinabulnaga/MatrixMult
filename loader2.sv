@@ -137,9 +137,10 @@ module tile_loader #(
       b_din  <= '0;
 
       case (st)
-        S_IDLE: begin
+ S_IDLE: begin
           avm_read <= 1'b0;
           if (start) begin
+            $display("[%0t] LOADER: Starting load", $time);
             beats_seen <= 0;
             k_idx      <= 0;
             outer_idx  <= 0;
@@ -150,6 +151,8 @@ module tile_loader #(
 
         S_ISSUE: begin
           avm_read <= 1'b1;
+          if (!avm_waitrequest)
+            $display("[%0t] LOADER: Request accepted", $time);
         end
 
         S_FILL: begin
@@ -202,11 +205,12 @@ module tile_loader #(
           end
 
           // Done condition
-          if ((outer_idx == ((!col_major_mode) ? tile_rows : tile_cols)) &&
+  if ((outer_idx == ((!col_major_mode) ? tile_rows : tile_cols)) &&
               (k_idx == 0) &&
               (beats_seen == beats_expected) &&
               !have_beat) begin
             done <= 1'b1;
+            $display("[%0t] LOADER: Done! beats_seen=%0d expected=%0d", $time, beats_seen, beats_expected);
           end
         end
 
@@ -230,4 +234,3 @@ module tile_loader #(
   end
 
 endmodule
-

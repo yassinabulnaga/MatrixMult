@@ -3,7 +3,8 @@
 // Implements C = A * B using tiled matrix multiplication
 // Data flow: DDR -> Loader -> A/B BRAM -> PE Array -> C BRAM -> Drainer -> FIFO -> Packer -> Writer -> DDR
 
-`include "mm_pkg.sv"
+import mm_pkg::*;
+
 
 module mm_top #(
   parameter int W           = mm_pkg::W,         // Element width (8-bit)

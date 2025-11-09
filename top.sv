@@ -500,6 +500,18 @@ module mm_top #(
   );
   
 
+  // Bus Arbiter - Round-robin for loaders
+  logic arb_grant_A;
+  
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      arb_grant_A <= 1'b0;
+    end else begin
+      if ((loaderA_avm_read && !avm_waitrequest) || (loaderB_avm_read && !avm_waitrequest)) begin
+        arb_grant_A <= ~arb_grant_A;
+      end
+    end
+  end
   
   always_comb begin
     // Default: no activity
@@ -520,7 +532,7 @@ module mm_top #(
     
     writer_avm_waitrequest    = 1'b1;
     
-    // Priority: Writer > LoaderA > LoaderB
+    // Priority: Writer > LoaderA/B (round-robin)
     if (writer_avm_write) begin
       // Writer has priority
       avm_address            = writer_avm_address;
@@ -530,8 +542,26 @@ module mm_top #(
       avm_burstcount         = writer_avm_burstcount;
       writer_avm_waitrequest = avm_waitrequest;
       
+    end else if (arb_grant_A && loaderA_avm_read) begin
+      // LoaderA has priority this cycle
+      avm_address                = loaderA_avm_address;
+      avm_read                   = loaderA_avm_read;
+      avm_burstcount             = loaderA_avm_burstcount;
+      loaderA_avm_readdata       = avm_readdata;
+      loaderA_avm_readdatavalid  = avm_readdatavalid;
+      loaderA_avm_waitrequest    = avm_waitrequest;
+      
+    end else if (!arb_grant_A && loaderB_avm_read) begin
+      // LoaderB has priority this cycle
+      avm_address                = loaderB_avm_address;
+      avm_read                   = loaderB_avm_read;
+      avm_burstcount             = loaderB_avm_burstcount;
+      loaderB_avm_readdata       = avm_readdata;
+      loaderB_avm_readdatavalid  = avm_readdatavalid;
+      loaderB_avm_waitrequest    = avm_waitrequest;
+      
     end else if (loaderA_avm_read) begin
-      // LoaderA gets bus
+      // LoaderA fallback
       avm_address                = loaderA_avm_address;
       avm_read                   = loaderA_avm_read;
       avm_burstcount             = loaderA_avm_burstcount;
@@ -540,7 +570,7 @@ module mm_top #(
       loaderA_avm_waitrequest    = avm_waitrequest;
       
     end else if (loaderB_avm_read) begin
-      // LoaderB gets bus
+      // LoaderB fallback
       avm_address                = loaderB_avm_address;
       avm_read                   = loaderB_avm_read;
       avm_burstcount             = loaderB_avm_burstcount;
