@@ -37,7 +37,7 @@ module tile_loader #(
 );
 
   localparam int BYTES_PER_BEAT = BUSW / 8;
-  localparam int EPP            = BUSW / W;
+  localparam int EPP            = BUSW / W;  // elements per beat
 
   // Sanity check
   initial begin
@@ -45,12 +45,12 @@ module tile_loader #(
       $fatal(1, "BUSW must be multiple of W");
   end
 
-  // Total elements
+  // Total elements to fetch
   logic [31:0] elems_total;
   always_comb begin
     elems_total = (!col_major_mode)
-                ? (tile_rows * tile_len_k)
-                : (tile_cols * tile_len_k);
+                  ? (tile_rows * tile_len_k)    // A-like
+                  : (tile_cols * tile_len_k);   // B-like
   end
 
   // Beats = ceil(elems_total / EPP)
@@ -63,23 +63,31 @@ module tile_loader #(
   typedef enum logic [1:0] {S_IDLE, S_ISSUE, S_FILL, S_DONE} st_t;
   st_t st, st_n;
 
-  // State
+  // Counters / state
   logic [31:0] beats_seen;
   logic [31:0] k_idx;
   logic [31:0] outer_idx;
 
   // Beat buffer + unpack
   logic [BUSW-1:0] beat_q;
-  logic [7:0]      unpack_ptr;
+  logic [7:0]      unpack_ptr;   // 0 .. EPP-1
   logic            have_beat;
 
-  // Temps (no inline decls)
-  int          base;
-  logic [W-1:0] elem;
-  logic [31:0]  row_i, col_i;
-  int           bank;
+  // Temps for unpacking (declared once: no inline declarations with init)
+  int              lo, hi;
+  logic [W-1:0]    elem;
+  logic [31:0]     row_i, col_i;
+  int              bank;
 
-  // Burstcount clamp
+  // Default BRAM drive
+  always_comb begin
+    b_en   = '0;
+    b_we   = '0;
+    b_addr = '0;
+    b_din  = '0;
+  end
+
+  // Burstcount: clamp to [1..255]
   assign avm_burstcount =
       (beats_expected == 0)   ? 8'd1   :
       (beats_expected > 255)  ? 8'd255 :
@@ -99,10 +107,10 @@ module tile_loader #(
         ? (addr_aligned >> $clog2(BYTES_PER_BEAT))
         :  addr_aligned;
 
-  // Busy
+  // Busy flag: any non-IDLE/non-DONE activity
   assign busy = (st != S_IDLE) && (st != S_DONE);
 
-  // State reg
+  // FSM state reg
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n)
       st <= S_IDLE;
@@ -110,7 +118,7 @@ module tile_loader #(
       st <= st_n;
   end
 
-  // Main sequential
+  // Main sequential logic
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       avm_read    <= 1'b0;
@@ -121,20 +129,9 @@ module tile_loader #(
       unpack_ptr  <= '0;
       beat_q      <= '0;
       done        <= 1'b0;
-
-      b_en        <= '0;
-      b_we        <= '0;
-      b_addr      <= '0;
-      b_din       <= '0;
     end
     else begin
-      done   <= 1'b0;
-
-      // Default BRAM outputs each cycle
-      b_en   <= '0;
-      b_we   <= '0;
-      b_addr <= '0;
-      b_din  <= '0;
+      done <= 1'b0;
 
       case (st)
         S_IDLE: begin
@@ -149,13 +146,18 @@ module tile_loader #(
         end
 
         S_ISSUE: begin
+          // Hold read high until accepted
           avm_read <= 1'b1;
+          if (!avm_waitrequest) begin
+            // Once accepted, the FSM will move to S_FILL
+          end
         end
 
         S_FILL: begin
+          // Drop read while we wait for return data
           avm_read <= 1'b0;
 
-          // Capture returning beat
+          // Capture returning beats
           if (avm_readdatavalid) begin
             beat_q     <= avm_readdata;
             have_beat  <= 1'b1;
@@ -163,23 +165,28 @@ module tile_loader #(
             beats_seen <= beats_seen + 1;
           end
 
-          // Unpack one element per cycle
+          // Unpack one element per cycle -> write into BRAM banks
           if (have_beat) begin
-            base = unpack_ptr * W;
-            elem = beat_q[base +: W];  // variable part-select (SV style)
+            // Slice current element from beat_q
+            lo   = unpack_ptr * W;
+            hi   = lo + W - 1;
+            elem = beat_q[hi:lo];
 
-            // Map to row/col
+            // Map linear index -> (row_i, col_i)
             if (!col_major_mode) begin
+              // A-like: outer = row, inner = k
               row_i = outer_idx;
               col_i = k_idx;
             end else begin
+              // B-like: outer = col, inner = k
               row_i = k_idx;
               col_i = outer_idx;
             end
 
-            // Bank select
+            // Bank select by row/col
             bank = (!col_major_mode) ? (row_i % T) : (col_i % T);
 
+            // Write into selected bank
             if (bank >= 0 && bank < T) begin
               b_en  [bank] <= 1'b1;
               b_we  [bank] <= 1'b1;
@@ -187,10 +194,11 @@ module tile_loader #(
               b_addr[bank] <= {bankset_sel, k_idx[AW-2:0]};
             end
 
-            // Advance within beat
+            // Advance unpack pointer within this beat
             unpack_ptr <= unpack_ptr + 1;
-            if (unpack_ptr + 1 == EPP)
-              have_beat <= 1'b0;
+            if (unpack_ptr + 1 == EPP) begin
+              have_beat <= 1'b0; // done with this beat
+            end
 
             // Advance k / outer
             if (k_idx + 1 == tile_len_k) begin
@@ -201,7 +209,7 @@ module tile_loader #(
             end
           end
 
-          // Done condition
+          // Done when all elements consumed and all beats seen
           if ((outer_idx == ((!col_major_mode) ? tile_rows : tile_cols)) &&
               (k_idx == 0) &&
               (beats_seen == beats_expected) &&
@@ -212,22 +220,22 @@ module tile_loader #(
 
         S_DONE: begin
           avm_read <= 1'b0;
+          // done already pulsed in S_FILL; wait for FSM to go back to IDLE
         end
       endcase
     end
   end
 
-  // Next-state
+  // Next-state logic
   always_comb begin
     st_n = st;
     unique case (st)
       S_IDLE:  if (start)            st_n = S_ISSUE;
       S_ISSUE: if (!avm_waitrequest) st_n = S_FILL;
       S_FILL:  if (done)             st_n = S_DONE;
-      S_DONE:                        st_n = S_IDLE;
-      default:                       st_n = S_IDLE;
+      S_DONE:                      st_n = S_IDLE;
+      default:                     st_n = S_IDLE;
     endcase
   end
 
 endmodule
-

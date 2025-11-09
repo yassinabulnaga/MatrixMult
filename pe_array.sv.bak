@@ -5,7 +5,7 @@
 // - drain_pulse snakes (serpentine) across all PEs so every tile sees the edge.
 // - On each PE's drain edge, we latch its accumulator into acc_mat and raise acc_v_mat.
 
-import mm_pkg::*;
+`include "mm_pkg.sv"
 
 module pe_array #(
   parameter int W        = mm_pkg::W,

@@ -1,0 +1,266 @@
+`timescale 1ns/1ps
+
+module tb_avalon_mm_writer;
+
+  localparam int BEAT_W         = 128;
+  localparam int ADDR_W         = 32;
+  localparam int BYTES_PER_BEAT = BEAT_W/8;
+  localparam int N_BEATS        = 5;
+
+  // clock / reset
+  logic clk;
+  logic rst_n;
+
+  // stream in
+  logic                   s_valid;
+  logic                   s_ready;
+  logic [BEAT_W-1:0]      s_data;
+  logic [BEAT_W/8-1:0]    s_strb;
+  logic                   s_last;
+
+  // control
+  logic                   start;
+  logic [ADDR_W-1:0]      base_addr;
+  logic                   busy;
+  logic                   done;
+
+  // Avalon-MM
+  logic [ADDR_W-1:0]      avm_address;
+  logic                   avm_write;
+  logic [BEAT_W-1:0]      avm_writedata;
+  logic [BEAT_W/8-1:0]    avm_byteenable;
+  logic [7:0]             avm_burstcount;
+  logic                   avm_waitrequest;
+
+  // expected patterns
+  logic [BEAT_W-1:0]      exp_data [0:N_BEATS-1];
+  logic [BEAT_W/8-1:0]    exp_strb [0:N_BEATS-1];
+
+  // driver / monitor state
+  int                     tx_idx;
+  int                     wr_idx;
+  logic                   streaming;
+
+  logic                   done_seen;
+  logic                   last_accept_final;
+  logic                   last_accept_final_q;
+
+  // waitrequest pattern
+  logic [3:0]             wr_pat_cnt;
+
+  // DUT
+  avalon_mm_writer #(
+    .BEAT_W(BEAT_W),
+    .ADDR_W(ADDR_W)
+  ) dut (
+    .clk            (clk),
+    .rst_n          (rst_n),
+
+    .s_valid        (s_valid),
+    .s_ready        (s_ready),
+    .s_data         (s_data),
+    .s_strb         (s_strb),
+    .s_last         (s_last),
+
+    .start          (start),
+    .base_addr      (base_addr),
+    .busy           (busy),
+    .done           (done),
+
+    .avm_address    (avm_address),
+    .avm_write      (avm_write),
+    .avm_writedata  (avm_writedata),
+    .avm_byteenable (avm_byteenable),
+    .avm_burstcount (avm_burstcount),
+    .avm_waitrequest(avm_waitrequest)
+  );
+
+  // 100 MHz clock
+  initial begin
+    clk = 1'b0;
+  end
+
+  always #5 clk = ~clk;
+
+  // init, patterns, reset, start pulse
+  initial begin
+    // defaults for non-sequential TB stuff
+    base_addr = 32'h0000_1000;
+
+    // deterministic patterns
+    exp_data[0] = 128'h0001_0001_0001_0001_0001_0001_0001_0001;
+    exp_data[1] = 128'h0002_0002_0002_0002_0002_0002_0002_0002;
+    exp_data[2] = 128'h0003_0003_0003_0003_0003_0003_0003_0003;
+    exp_data[3] = 128'h0004_0004_0004_0004_0004_0004_0004_0004;
+    exp_data[4] = 128'hDEAD_BEEF_F00D_CAFE_0123_4567_89AB_CDEF;
+
+    exp_strb[0] = {BEAT_W/8{1'b1}};
+    exp_strb[1] = {BEAT_W/8{1'b1}};
+    exp_strb[2] = {BEAT_W/8{1'b1}};
+    exp_strb[3] = {BEAT_W/8{1'b1}};
+    exp_strb[4] = 16'h0F0F;
+
+    // reset + init sequential state via their always blocks
+    rst_n             = 1'b0;
+    start             = 1'b0;
+
+    repeat (5) @(posedge clk);
+    rst_n = 1'b1;
+
+    // kick transfer
+    @(posedge clk);
+    start = 1'b1;
+    @(posedge clk);
+    start = 1'b0;
+  end
+
+  // Avalon waitrequest: 3 cycles ready, 1 cycle stall
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      wr_pat_cnt      <= 4'd0;
+      avm_waitrequest <= 1'b0;
+    end else begin
+      if (wr_pat_cnt == 4'd3) begin
+        wr_pat_cnt      <= 4'd0;
+        avm_waitrequest <= 1'b1;
+      end else begin
+        wr_pat_cnt      <= wr_pat_cnt + 4'd1;
+        avm_waitrequest <= 1'b0;
+      end
+    end
+  end
+
+  // valid/ready-correct stream driver
+  // holds each beat stable until accepted
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      s_valid   <= 1'b0;
+      s_last    <= 1'b0;
+      s_data    <= '0;
+      s_strb    <= '0;
+      tx_idx    <= 0;
+      streaming <= 1'b0;
+    end else begin
+      if (!busy) begin
+        // idle until DUT in WRITE
+        s_valid   <= 1'b0;
+        s_last    <= 1'b0;
+        s_data    <= '0;
+        s_strb    <= '0;
+        tx_idx    <= 0;
+        streaming <= 1'b0;
+      end else begin
+        if (!streaming) begin
+          // start streaming on first busy
+          streaming <= 1'b1;
+          tx_idx    <= 0;
+          s_valid   <= 1'b1;
+          s_data    <= exp_data[0];
+          s_strb    <= exp_strb[0];
+          s_last    <= (N_BEATS == 1);
+        end else if (tx_idx < N_BEATS) begin
+          // wait for handshake
+          if (s_valid && s_ready) begin
+            if (tx_idx == N_BEATS-1) begin
+              // last beat just accepted
+              tx_idx    <= tx_idx + 1;
+              s_valid   <= 1'b0;
+              s_last    <= 1'b0;
+              s_data    <= '0;
+              s_strb    <= '0;
+            end else begin
+              // advance to next beat
+              tx_idx    <= tx_idx + 1;
+              s_valid   <= 1'b1;
+              s_data    <= exp_data[tx_idx+1];
+              s_strb    <= exp_strb[tx_idx+1];
+              s_last    <= (tx_idx+1 == N_BEATS-1);
+            end
+          end
+          // else: hold current beat while !s_ready
+        end else begin
+          // all beats launched
+          s_valid <= 1'b0;
+          s_last  <= 1'b0;
+          s_data  <= '0;
+          s_strb  <= '0;
+        end
+      end
+    end
+  end
+
+  // scoreboard + done timing
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      wr_idx              <= 0;
+      done_seen           <= 1'b0;
+      last_accept_final   <= 1'b0;
+      last_accept_final_q <= 1'b0;
+    end else begin
+      last_accept_final_q <= last_accept_final;
+      last_accept_final   <= 1'b0;
+
+      // accepted write
+      if (avm_write && !avm_waitrequest) begin
+
+        if (wr_idx >= N_BEATS)
+          $fatal(1, "[TB] Extra write detected (wr_idx=%0d)", wr_idx);
+
+        if (avm_address !== (base_addr + wr_idx*BYTES_PER_BEAT))
+          $fatal(1,
+            "[TB] Addr mismatch @write %0d: got %h exp %h",
+            wr_idx, avm_address, base_addr + wr_idx*BYTES_PER_BEAT);
+
+        if (avm_writedata !== exp_data[wr_idx])
+          $fatal(1,
+            "[TB] Data mismatch @write %0d: got %h exp %h",
+            wr_idx, avm_writedata, exp_data[wr_idx]);
+
+        if (avm_byteenable !== exp_strb[wr_idx])
+          $fatal(1,
+            "[TB] Byteenable mismatch @write %0d: got %h exp %h",
+            wr_idx, avm_byteenable, exp_strb[wr_idx]);
+
+        if (avm_burstcount !== 8'd1)
+          $fatal(1,
+            "[TB] Burstcount mismatch: got %0d exp 1", avm_burstcount);
+
+        if (wr_idx == N_BEATS-1)
+          last_accept_final <= 1'b1;
+
+        wr_idx <= wr_idx + 1;
+      end
+
+      // done: single pulse, 1 cycle after final accept
+      if (done) begin
+        if (done_seen)
+          $fatal(1, "[TB] done asserted more than once");
+
+        done_seen <= 1'b1;
+
+        if (!last_accept_final_q)
+          $fatal(1,
+            "[TB] done not 1 cycle after final accepted write");
+      end
+    end
+  end
+
+  // finish
+  initial begin
+    wait(rst_n);
+    wait(done_seen);
+    repeat (3) @(posedge clk);
+
+    if (wr_idx != N_BEATS)
+      $fatal(1,
+        "[TB] Expected %0d writes, saw %0d", N_BEATS, wr_idx);
+
+    if (busy !== 1'b0)
+      $fatal(1, "[TB] busy not low after completion");
+
+    $display("tb_avalon_mm_writer: PASS");
+    $finish;
+  end
+
+endmodule
+
