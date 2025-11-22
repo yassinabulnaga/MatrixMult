@@ -263,7 +263,7 @@ module tb_64x64_matmul;
     input int tile_col_b,  // Which tile column in B (0-3)
     input int tile_k       // Which K tile (0-3)
   );
-    int cycle, i, row_idx, col_idx, addr;
+    int cycle, i, addr;
     
     // Stream the tile using systolic pattern
     for (cycle = 0; cycle < (3*T-2); cycle++) begin
@@ -272,21 +272,15 @@ module tb_64x64_matmul;
 
       for (i = 0; i < T; i++) begin
         if ((cycle >= i) && (cycle < i + T)) begin
-          // For A: PE row i needs matrix row (tile_row_a*T + i)
-          // This row is stored in bank (tile_row_a*T + i) % T = i (when tiles aligned)
-          // We need column tile_k*T + (cycle-i)
-          row_idx = tile_row_a * T + i;
-          bram_a_en[row_idx % T] = 1'b1;
-          addr = (row_idx / T) * 64 + tile_k * T + (cycle - i);
-          bram_a_addr[row_idx % T] = addr[11:0];
+          // For A: bank i gets data for PE row i
+          bram_a_en[i] = 1'b1;
+          addr = tile_row_a * 64 + tile_k * T + (cycle - i);
+          bram_a_addr[i] = addr[11:0];
           
-          // For B: PE column i needs matrix column (tile_col_b*T + i)  
-          // This column is stored in bank (tile_col_b*T + i) % T = i (when tiles aligned)
-          // We need row tile_k*T + (cycle-i)
-          col_idx = tile_col_b * T + i;
-          bram_b_en[col_idx % T] = 1'b1;
-          addr = (col_idx / T) * 64 + tile_k * T + (cycle - i);
-          bram_b_addr[col_idx % T] = addr[11:0];
+          // For B: bank i gets data for PE column i
+          bram_b_en[i] = 1'b1;
+          addr = tile_col_b * 64 + tile_k * T + (cycle - i);
+          bram_b_addr[i] = addr[11:0];
         end
       end
 
@@ -315,7 +309,6 @@ module tb_64x64_matmul;
 
     // Process all K tiles (accumulate partial products)
     for (k = 0; k < NUM_TILES; k++) begin
-      $display("      K tile %0d", k);
       stream_tile(tile_i, tile_j, k);
     end
 
@@ -324,6 +317,13 @@ module tb_64x64_matmul;
     @(posedge clk);
     pe_drain_pulse = 0;
     repeat (T + 5) @(posedge clk);
+    
+    // Debug: Check a few values from this tile
+    if (tile_i == 3 && tile_j == 0) begin
+      $display("      Tile[3][0] PE results:");
+      $display("        PE[15][0] = %d (for global C[63][0], expect %d)", 
+               $signed(pe_acc_mat[15][0]), (63*64+1) % 128);
+    end
   endtask
 
   // Write current PE results to BRAM C at specified tile location
@@ -333,8 +333,18 @@ module tb_64x64_matmul;
   );
     int i, j, global_row, global_col, bank, addr;
 
+    // Debug: Show what we're about to write for first and last elements
+    if ((tile_i == 0 && tile_j == 0) || (tile_i == 3 && tile_j == 3)) begin
+      $display("      Writing tile [%0d][%0d]:", tile_i, tile_j);
+      $display("        PE[0][0] = %0d -> C[%0d][%0d]", 
+               $signed(pe_acc_mat[0][0]), tile_i*T, tile_j*T);
+      $display("        PE[15][15] = %0d -> C[%0d][%0d]", 
+               $signed(pe_acc_mat[15][15]), tile_i*T+15, tile_j*T+15);
+    end
+
     for (i = 0; i < T; i++) begin
       for (j = 0; j < T; j++) begin
+        // PE[i][j] corresponds to global position:
         global_row = tile_i * T + i;
         global_col = tile_j * T + j;
         
@@ -406,18 +416,33 @@ module tb_64x64_matmul;
       row = test_points[p][0];
       col = test_points[p][1];
       
-      // Match the addressing used in write_tile_to_bram_c
+      // Correct addressing:
+      // Row 32 is in bank 0 (32 % 16 = 0)
+      // Row 32 is in the 3rd tile row (32 / 16 = 2)
+      // So address = 2 * 64 + col
       bank = row % T;
       addr = (row / T) * 64 + col;
       
+      $display("    Reading C[%0d][%0d]: bank=%0d, addr=%0d", row, col, bank, addr);
+      
       bram_c_en = '0;
+      bram_c_we = '0;
+      @(posedge clk);
+      
+      // Set address and enable for read
       bram_c_en[bank] = 1'b1;
       bram_c_addr[bank] = addr[11:0];
       bram_c_we[bank] = 1'b0;
       
-      repeat(2) @(posedge clk);
+      // Wait for BRAM read latency
+      @(posedge clk);
+      
+      // Capture data while enable is still high
       read_val = bram_c_dout[bank];
+      
+      // Disable bank
       bram_c_en[bank] = 1'b0;
+      @(posedge clk);
       
       if (read_val !== expected[row][col]) begin
         $display("    ERROR at [%0d][%0d]: got %0d, expected %0d", 
@@ -444,7 +469,8 @@ module tb_64x64_matmul;
     logic [63:0][63:0][W-1:0]    mat_a, mat_b;
     logic [63:0][63:0][ACCW-1:0] expected;
     int i, j, k;
-
+automatic int val;
+ automatic int val1;
     $display("\n=== Test: 64x64 Matrix Multiplication ===");
     $display("  Using %0d-bit signed integers", W);
     $display("  PE Array: %0dx%0d", T, T);
@@ -465,26 +491,26 @@ module tb_64x64_matmul;
     for (i = 0; i < 64; i++) begin
       for (j = 0; j < 64; j++) begin
         mat_a[i][j] = (i == j) ? 8'd1 : 8'd0;  // Identity matrix
-        mat_b[i][j] = W'((i * 64 + j + 1) % 128);  // Sequential 1-127, wrapping
+        // Use modulo 128 to keep in signed byte range
+        val1 = (i * 64 + j + 1) % 128;
+        mat_b[i][j] = W'(val);
       end
     end
     
     // Calculate expected: C = A * B = I * B = B
     for (i = 0; i < 64; i++) begin
       for (j = 0; j < 64; j++) begin
-        expected[i][j] = {{(ACCW-W){1'b0}}, mat_b[i][j]};  // Zero-extend B values to ACCW width
+         val = (i * 64 + j + 1) % 128;
+        expected[i][j] = ACCW'(val);  // Sign-extend or zero-extend properly
       end
     end
     
-    // Debug: Check that matrices are initialized correctly
+    // Debug: Check specific values
     $display("  Matrix initialization check:");
-    $display("    A[0][0] = %d (should be 1)", mat_a[0][0]);
-    $display("    A[0][1] = %d (should be 0)", mat_a[0][1]);
-    $display("    A[1][1] = %d (should be 1)", mat_a[1][1]);
-    $display("    B[0][0] = %d (should be 1)", mat_b[0][0]);
-    $display("    B[0][63] = %d (should be 64)", mat_b[0][63]);
-    $display("    Expected[0][0] = %d (should be 1)", expected[0][0]);
-    $display("    Expected[0][63] = %d (should be 64)", expected[0][63]);
+    $display("    B[63][0] = %d (should be %d)", mat_b[63][0], (63*64+1) % 128);
+    $display("    B[63][63] = %d (should be %d)", mat_b[63][63], (63*64+64) % 128);
+    $display("    Expected[63][0] = %d", expected[63][0]);
+    $display("    Expected[63][63] = %d", expected[63][63]);
 
     // Alternative test pattern (comment out above and use this for more complex test):
     /*

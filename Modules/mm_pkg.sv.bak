@@ -4,7 +4,7 @@
 
 `timescale 1ns/1ps
 
-module tb_64x64_matmul;
+module tb_a;
 
   import mm_pkg::*;
 
@@ -263,7 +263,7 @@ module tb_64x64_matmul;
     input int tile_col_b,  // Which tile column in B (0-3)
     input int tile_k       // Which K tile (0-3)
   );
-    int cycle, i, row_idx, col_idx, addr;
+    int cycle, i, addr;
     
     // Stream the tile using systolic pattern
     for (cycle = 0; cycle < (3*T-2); cycle++) begin
@@ -272,21 +272,19 @@ module tb_64x64_matmul;
 
       for (i = 0; i < T; i++) begin
         if ((cycle >= i) && (cycle < i + T)) begin
-          // For A: PE row i needs matrix row (tile_row_a*T + i)
-          // This row is stored in bank (tile_row_a*T + i) % T = i (when tiles aligned)
-          // We need column tile_k*T + (cycle-i)
-          row_idx = tile_row_a * T + i;
-          bram_a_en[row_idx % T] = 1'b1;
-          addr = (row_idx / T) * 64 + tile_k * T + (cycle - i);
-          bram_a_addr[row_idx % T] = addr[11:0];
+          // For A: we need row (tile_row_a*T + i), column (tile_k*T + (cycle-i))
+          // Bank i corresponds to row (tile_row_a*T + i)
+          // Address for that row at column (tile_k*T + (cycle-i))
+          bram_a_en[i] = 1'b1;
+          addr = tile_row_a * 64 + tile_k * T + (cycle - i);
+          bram_a_addr[i] = addr[11:0];
           
-          // For B: PE column i needs matrix column (tile_col_b*T + i)  
-          // This column is stored in bank (tile_col_b*T + i) % T = i (when tiles aligned)
-          // We need row tile_k*T + (cycle-i)
-          col_idx = tile_col_b * T + i;
-          bram_b_en[col_idx % T] = 1'b1;
-          addr = (col_idx / T) * 64 + tile_k * T + (cycle - i);
-          bram_b_addr[col_idx % T] = addr[11:0];
+          // For B: we need column (tile_col_b*T + i), row (tile_k*T + (cycle-i))  
+          // Bank i corresponds to column (tile_col_b*T + i)
+          // Address for that column at row (tile_k*T + (cycle-i))
+          bram_b_en[i] = 1'b1;
+          addr = tile_col_b * 64 + tile_k * T + (cycle - i);
+          bram_b_addr[i] = addr[11:0];
         end
       end
 
@@ -396,11 +394,11 @@ module tb_64x64_matmul;
     
     // First, let's check what we expect
     $display("  Expected values:");
-    $display("    Expected[0][0] = %d", expected[0][0]);
-    $display("    Expected[0][63] = %d", expected[0][63]); 
-    $display("    Expected[63][0] = %d", expected[63][0]);
-    $display("    Expected[63][63] = %d", expected[63][63]);
-    $display("    Expected[32][32] = %d", expected[32][32]);
+    $display("    B[0][0] = %d (should be 1)", mat_b[0][0]);
+    $display("    B[0][63] = %d (should be 64)", mat_b[0][63]); 
+    $display("    B[63][0] = %d (should be 65)", mat_b[63][0]);
+    $display("    B[63][63] = %d (should be 128->0)", mat_b[63][63]);
+    $display("    B[32][32] = %d (should be 33)", mat_b[32][32]);
     
     for (p = 0; p < 5; p++) begin
       row = test_points[p][0];
@@ -450,14 +448,10 @@ module tb_64x64_matmul;
     $display("  PE Array: %0dx%0d", T, T);
     $display("  Tiles: %0dx%0d grid", NUM_TILES, NUM_TILES);
 
-    // Initialize ALL matrices to zero first
-    for (i = 0; i < 64; i++) begin
-      for (j = 0; j < 64; j++) begin
-        mat_a[i][j] = '0;
-        mat_b[i][j] = '0;
-        expected[i][j] = '0;
-      end
-    end
+    // Initialize matrices with simple patterns
+    mat_a = '0;
+    mat_b = '0;
+    expected = '0;
 
     // Simple diagonal test first to verify the data path
     // A = identity matrix, B = sequential values 1,2,3...
@@ -465,26 +459,16 @@ module tb_64x64_matmul;
     for (i = 0; i < 64; i++) begin
       for (j = 0; j < 64; j++) begin
         mat_a[i][j] = (i == j) ? 8'd1 : 8'd0;  // Identity matrix
-        mat_b[i][j] = W'((i * 64 + j + 1) % 128);  // Sequential 1-127, wrapping
+        mat_b[i][j] = W'((i * 64 + j + 1) & 8'h7F);  // Sequential 1-127
       end
     end
     
     // Calculate expected: C = A * B = I * B = B
     for (i = 0; i < 64; i++) begin
       for (j = 0; j < 64; j++) begin
-        expected[i][j] = {{(ACCW-W){1'b0}}, mat_b[i][j]};  // Zero-extend B values to ACCW width
+        expected[i][j] = mat_b[i][j];  // Since A is identity
       end
     end
-    
-    // Debug: Check that matrices are initialized correctly
-    $display("  Matrix initialization check:");
-    $display("    A[0][0] = %d (should be 1)", mat_a[0][0]);
-    $display("    A[0][1] = %d (should be 0)", mat_a[0][1]);
-    $display("    A[1][1] = %d (should be 1)", mat_a[1][1]);
-    $display("    B[0][0] = %d (should be 1)", mat_b[0][0]);
-    $display("    B[0][63] = %d (should be 64)", mat_b[0][63]);
-    $display("    Expected[0][0] = %d (should be 1)", expected[0][0]);
-    $display("    Expected[0][63] = %d (should be 64)", expected[0][63]);
 
     // Alternative test pattern (comment out above and use this for more complex test):
     /*
@@ -565,7 +549,7 @@ module tb_64x64_matmul;
   // ------------------------------------------------------------
   initial begin
     $dumpfile("tb_64x64_matmul.vcd");
-    $dumpvars(0, tb_64x64_matmul);
+    $dumpvars(0, tb_a);
   end
 
 endmodule

@@ -1,0 +1,575 @@
+// ====================== tb_bram_pe_bram.sv ======================
+// Testbench for BRAM A + BRAM B ? PE Array ? BRAM C path
+// Tests the complete matrix multiplication datapath
+
+`timescale 1ns/1ps
+
+module tb_bram_pe_bram;
+
+  import mm_pkg::*;
+
+  // Clock and reset
+  logic clk;
+  logic rst_n;
+
+  // Clock generation (100MHz)
+  initial begin
+    clk = 0;
+    forever #5 clk = ~clk;
+  end
+
+  // ============================================================
+  // BRAM A (Matrix A storage)
+  // ============================================================
+  logic [T-1:0] bram_a_en;
+  logic [T-1:0][9:0] bram_a_addr;  // Assume 1024 depth
+  logic [T-1:0][W-1:0] bram_a_din;
+  logic [T-1:0] bram_a_we;
+  logic [T-1:0] bram_a_be;
+  logic [T-1:0][W-1:0] bram_a_dout;
+
+  m10k_banks #(
+    .N_BANKS(T),
+    .W(W),
+    .DEPTH_PER_BANK(1024),
+    .USE_BYTE_EN(0),
+    .RDW_MODE(0)  // WRITE_FIRST - written data appears on output
+  ) bram_a (
+    .clk(clk),
+    .rst_n(rst_n),
+    .a_en(bram_a_en),
+    .a_addr(bram_a_addr),
+    .a_din(bram_a_din),
+    .a_we(bram_a_we),
+    .a_be(bram_a_be),
+    .a_dout(bram_a_dout),
+    .b_en('0),      // Port B unused
+    .b_addr('0),
+    .b_din('0),
+    .b_we('0),
+    .b_be('0),
+    .b_dout()
+  );
+
+  // ============================================================
+  // BRAM B (Matrix B storage)
+  // ============================================================
+  logic [T-1:0] bram_b_en;
+  logic [T-1:0][9:0] bram_b_addr;
+  logic [T-1:0][W-1:0] bram_b_din;
+  logic [T-1:0] bram_b_we;
+  logic [T-1:0] bram_b_be;
+  logic [T-1:0][W-1:0] bram_b_dout;
+
+  m10k_banks #(
+    .N_BANKS(T),
+    .W(W),
+    .DEPTH_PER_BANK(1024),
+    .USE_BYTE_EN(0),
+    .RDW_MODE(0)  // WRITE_FIRST - written data appears on output
+  ) bram_b (
+    .clk(clk),
+    .rst_n(rst_n),
+    .a_en(bram_b_en),
+    .a_addr(bram_b_addr),
+    .a_din(bram_b_din),
+    .a_we(bram_b_we),
+    .a_be(bram_b_be),
+    .a_dout(bram_b_dout),
+    .b_en('0),      // Port B unused
+    .b_addr('0),
+    .b_din('0),
+    .b_we('0),
+    .b_be('0),
+    .b_dout()
+  );
+
+  // ============================================================
+  // PE Array
+  // ============================================================
+  logic [T-1:0][W-1:0] pe_a_in_row;
+  logic [T-1:0] pe_a_in_valid;
+  logic [T-1:0][W-1:0] pe_b_in_col;
+  logic [T-1:0] pe_b_in_valid;
+  logic pe_acc_clear_block;
+  logic pe_drain_pulse;
+  logic [T-1:0][T-1:0][ACCW-1:0] pe_acc_mat;
+  logic [T-1:0][T-1:0] pe_acc_v_mat;
+
+  pe_array #(
+    .W(W),
+    .ACCW(ACCW),
+    .T(T),
+    .SIGNED_M(SIGNED_M),
+    .PIPE_MUL(PIPE_MUL)
+  ) dut_pe_array (
+    .clk(clk),
+    .rst_n(rst_n),
+    .a_in_row(pe_a_in_row),
+    .a_in_valid(pe_a_in_valid),
+    .b_in_col(pe_b_in_col),
+    .b_in_valid(pe_b_in_valid),
+    .acc_clear_block(pe_acc_clear_block),
+    .drain_pulse(pe_drain_pulse),
+    .acc_mat(pe_acc_mat),
+    .acc_v_mat(pe_acc_v_mat)
+  );
+
+  // ============================================================
+  // BRAM C (Result storage)
+  // ============================================================
+  logic [T-1:0] bram_c_en;
+  logic [T-1:0][9:0] bram_c_addr;
+  logic [T-1:0][ACCW-1:0] bram_c_din;
+  logic [T-1:0] bram_c_we;
+  logic [T-1:0][(ACCW/8)-1:0] bram_c_be;
+  logic [T-1:0][ACCW-1:0] bram_c_dout;
+
+  m10k_banks #(
+    .N_BANKS(T),
+    .W(ACCW),
+    .DEPTH_PER_BANK(1024),
+    .USE_BYTE_EN(0),
+    .RDW_MODE(0)  // WRITE_FIRST - written data appears on output
+  ) bram_c (
+    .clk(clk),
+    .rst_n(rst_n),
+    .a_en(bram_c_en),
+    .a_addr(bram_c_addr),
+    .a_din(bram_c_din),
+    .a_we(bram_c_we),
+    .a_be(bram_c_be),
+    .a_dout(bram_c_dout),
+    .b_en('0),      // Port B unused
+    .b_addr('0),
+    .b_din('0),
+    .b_we('0),
+    .b_be('0),
+    .b_dout()
+  );
+
+  // ============================================================
+  // Pipeline registers for BRAM read data (2-cycle latency)
+  // ============================================================
+  logic [T-1:0][W-1:0] bram_a_dout_q;
+  logic [T-1:0] bram_a_valid_q, bram_a_valid_q2;
+  logic [T-1:0][W-1:0] bram_b_dout_q;
+  logic [T-1:0] bram_b_valid_q, bram_b_valid_q2;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      bram_a_dout_q <= '0;
+      bram_a_valid_q <= '0;
+      bram_a_valid_q2 <= '0;
+      bram_b_dout_q <= '0;
+      bram_b_valid_q <= '0;
+      bram_b_valid_q2 <= '0;
+    end else begin
+      // Stage 1: Capture enable signals
+      bram_a_valid_q <= bram_a_en;
+      bram_b_valid_q <= bram_b_en;
+      
+      // Stage 2: Delay valid by another cycle AND capture data
+      bram_a_valid_q2 <= bram_a_valid_q;
+      bram_a_dout_q <= bram_a_dout;
+      bram_b_valid_q2 <= bram_b_valid_q;
+      bram_b_dout_q <= bram_b_dout;
+    end
+  end
+
+  // Connect BRAM outputs to PE array inputs (with correct valid alignment)
+  assign pe_a_in_row = bram_a_dout_q;
+  assign pe_a_in_valid = bram_a_valid_q2;  // Aligned with data
+  assign pe_b_in_col = bram_b_dout_q;
+  assign pe_b_in_valid = bram_b_valid_q2;  // Aligned with data
+
+  // ============================================================
+  // Debug monitoring
+  // ============================================================
+  always @(posedge clk) begin
+    if (pe_a_in_valid != 0 || pe_b_in_valid != 0) begin
+      $display("Time %0t: PE inputs - a_valid=%b, b_valid=%b", $time, pe_a_in_valid, pe_b_in_valid);
+      for (int idx = 0; idx < T; idx++) begin
+        if (pe_a_in_valid[idx]) $display("  a_in_row[%0d] = %0d", idx, pe_a_in_row[idx]);
+        if (pe_b_in_valid[idx]) $display("  b_in_col[%0d] = %0d", idx, pe_b_in_col[idx]);
+      end
+    end
+  end
+
+  // ============================================================
+  // Helper Tasks
+  // ============================================================
+
+  // Write matrix A to BRAM A (row-major, one row per bank)
+  task automatic write_matrix_a(input logic [T-1:0][T-1:0][W-1:0] mat_a);
+    int i, j, addr_val;
+    $display("  Writing Matrix A to BRAM...");
+    for (i = 0; i < T; i++) begin
+      for (j = 0; j < T; j++) begin
+        bram_a_en[i] = 1;
+        addr_val = j;
+        bram_a_addr[i] = addr_val[9:0];
+        bram_a_din[i] = mat_a[i][j];
+        bram_a_we[i] = 1;
+        if (i < 2 && j < 4) $display("    BRAM_A[%0d][%0d] = %0d", i, j, mat_a[i][j]);
+      end
+      @(posedge clk);
+    end
+    
+    // Disable everything and flush pipeline
+    bram_a_en = '0;
+    bram_a_we = '0;
+    repeat(5) @(posedge clk);  // Flush the 2-stage pipeline + margin
+    
+    $display("  Matrix A write complete");
+  endtask
+
+  // Write matrix B to BRAM B (column-major, one column per bank)
+  task automatic write_matrix_b(input logic [T-1:0][T-1:0][W-1:0] mat_b);
+    int i, j, addr_val;
+    $display("  Writing Matrix B to BRAM...");
+    for (j = 0; j < T; j++) begin
+      for (i = 0; i < T; i++) begin
+        bram_b_en[j] = 1;
+        addr_val = i;
+        bram_b_addr[j] = addr_val[9:0];
+        bram_b_din[j] = mat_b[i][j];
+        bram_b_we[j] = 1;
+      end
+      @(posedge clk);
+    end
+    
+    // Disable everything and flush pipeline
+    bram_b_en = '0;
+    bram_b_we = '0;
+    repeat(5) @(posedge clk);  // Flush the 2-stage pipeline + margin
+  endtask
+
+  // Stream matrices through PE array (systolic)
+  task automatic stream_matrices();
+    int cycle, i, j;
+    int addr_val;
+    $display("  Streaming matrices through PE array...");
+    
+    // Clear accumulator
+    pe_acc_clear_block = 1;
+    @(posedge clk);
+    pe_acc_clear_block = 0;
+    @(posedge clk);
+
+    // Stream for 2*T-1 cycles (systolic wavefront)
+    for (cycle = 0; cycle < 2*T-1; cycle++) begin
+      // Read from BRAM A (rows)
+      for (i = 0; i < T; i++) begin
+        if (cycle >= i && cycle - i < T) begin
+          bram_a_en[i] = 1;
+          addr_val = cycle - i;
+          bram_a_addr[i] = addr_val[9:0];
+        end else begin
+          bram_a_en[i] = 0;
+        end
+      end
+
+      // Read from BRAM B (columns)
+      for (j = 0; j < T; j++) begin
+        if (cycle >= j && cycle - j < T) begin
+          bram_b_en[j] = 1;
+          addr_val = cycle - j;
+          bram_b_addr[j] = addr_val[9:0];
+        end else begin
+          bram_b_en[j] = 0;
+        end
+      end
+
+      @(posedge clk);
+    end
+
+    // Stop reading
+    bram_a_en = '0;
+    bram_b_en = '0;
+    
+    // Wait for pipeline to flush (2-cycle BRAM latency + PE array processing)
+    repeat(10) @(posedge clk);
+  endtask
+
+  // Drain PE array results
+  task automatic drain_pe_results();
+    int i, j;
+    $display("  Draining PE array results...");
+    $display("  PE acc_v_mat before drain: %b", pe_acc_v_mat);
+    
+    pe_drain_pulse = 1;
+    @(posedge clk);
+    pe_drain_pulse = 0;
+    
+    // Wait for drain to propagate (serpentine through T×T array)
+    repeat(T*T + 5) @(posedge clk);
+    
+    $display("  PE acc_v_mat after drain: %b", pe_acc_v_mat);
+    $display("  Sample values:");
+    for (i = 0; i < 2 && i < T; i++) begin
+      for (j = 0; j < 2 && j < T; j++) begin
+        if (pe_acc_v_mat[i][j])
+          $display("    pe_acc_mat[%0d][%0d] = %0d", i, j, pe_acc_mat[i][j]);
+        else
+          $display("    pe_acc_mat[%0d][%0d] = INVALID", i, j);
+      end
+    end
+  endtask
+
+  // Write PE results to BRAM C
+  task automatic write_results_to_bram_c();
+    int i, j, addr_val;
+    $display("  Writing results to BRAM C...");
+    for (i = 0; i < T; i++) begin
+      for (j = 0; j < T; j++) begin
+        if (pe_acc_v_mat[i][j]) begin
+          bram_c_en[i] = 1;
+          addr_val = j;
+          bram_c_addr[i] = addr_val[9:0];
+          bram_c_din[i] = pe_acc_mat[i][j];
+          bram_c_we[i] = 1;
+        end
+      end
+      @(posedge clk);
+    end
+    bram_c_en = '0;
+    bram_c_we = '0;
+    @(posedge clk);
+  endtask
+
+  // Read and verify BRAM C contents
+  task automatic verify_bram_c(input logic [T-1:0][T-1:0][ACCW-1:0] expected);
+    logic [T-1:0][T-1:0][ACCW-1:0] result;
+    int i, j, addr_val, cap_col;
+    logic pass;
+
+    $display("  Reading BRAM C...");
+    
+    // Pipeline BRAM reads: issue read for column j, capture data for column j-2
+    // (2-cycle latency from dp_bram: 1 cycle for mem access + 1 cycle for output pipeline)
+    
+    // Prime the pipeline with first 2 reads
+    for (j = 0; j < 2 && j < T; j++) begin
+      for (i = 0; i < T; i++) begin
+        bram_c_en[i] = 1;
+        addr_val = j;
+        bram_c_addr[i] = addr_val[9:0];
+      end
+      @(posedge clk);
+    end
+    
+    // Now pipeline: issue read for column j, capture data for column j-2
+    for (j = 2; j < T + 2; j++) begin
+      // Issue read for column j (if in range)
+      if (j < T) begin
+        for (i = 0; i < T; i++) begin
+          bram_c_en[i] = 1;
+          addr_val = j;
+          bram_c_addr[i] = addr_val[9:0];
+        end
+      end else begin
+        bram_c_en = '0;
+      end
+      
+      // Capture data for column j-2
+      cap_col = j - 2;
+      if (cap_col >= 0 && cap_col < T) begin
+        for (i = 0; i < T; i++) begin
+          result[i][cap_col] = bram_c_dout[i];
+        end
+      end
+      
+      @(posedge clk);
+    end
+    
+    bram_c_en = '0;
+    @(posedge clk);
+
+    // Verify
+    $display("  Verifying results...");
+    pass = 1;
+    for (i = 0; i < T; i++) begin
+      for (j = 0; j < T; j++) begin
+        if (result[i][j] !== expected[i][j]) begin
+          $display("    MISMATCH: C[%0d][%0d] = %0d, expected %0d", 
+                   i, j, result[i][j], expected[i][j]);
+          pass = 0;
+        end
+      end
+    end
+
+    if (pass)
+      $display("  PASS: All results correct!");
+    else
+      $display("  FAIL: Mismatches found");
+  endtask
+
+  // ============================================================
+  // Test Cases
+  // ============================================================
+
+  // Test 1: 2×2 matrix multiplication
+  task automatic test_2x2_matmul();
+    logic [T-1:0][T-1:0][W-1:0] mat_a, mat_b;
+    logic [T-1:0][T-1:0][ACCW-1:0] expected;
+
+    $display("\n=== Test 1: 2×2 Matrix Multiplication ===");
+    $display("  A = [1 2]    B = [5 6]    C = [19 22]");
+    $display("      [3 4]        [7 8]        [43 50]");
+
+    // Initialize matrices
+    mat_a = '0;
+    mat_b = '0;
+    expected = '0;
+
+    mat_a[0][0] = 8'd1; mat_a[0][1] = 8'd2;
+    mat_a[1][0] = 8'd3; mat_a[1][1] = 8'd4;
+
+    mat_b[0][0] = 8'd5; mat_b[0][1] = 8'd6;
+    mat_b[1][0] = 8'd7; mat_b[1][1] = 8'd8;
+
+    expected[0][0] = 32'd19; expected[0][1] = 32'd22;
+    expected[1][0] = 32'd43; expected[1][1] = 32'd50;
+
+    // Execute
+    write_matrix_a(mat_a);
+    write_matrix_b(mat_b);
+    stream_matrices();
+    drain_pe_results();
+    write_results_to_bram_c();
+    verify_bram_c(expected);
+  endtask
+
+  // Test 2: 4×4 matrix multiplication (if T>=4)
+  task automatic test_4x4_matmul();
+    logic [T-1:0][T-1:0][W-1:0] mat_a, mat_b;
+    logic [T-1:0][T-1:0][ACCW-1:0] expected;
+    int i, j, k;
+
+    if (T < 4) begin
+      $display("\n=== Test 2: Skipped (T < 4) ===");
+      return;
+    end
+
+    $display("\n=== Test 2: 4×4 Matrix Multiplication ===");
+    $display("  A = identity, B = [1,2,3,...,16]");
+
+    // Initialize: A = identity, B = sequential
+    mat_a = '0;
+    mat_b = '0;
+    expected = '0;
+
+    for (i = 0; i < 4; i++) begin
+      mat_a[i][i] = 8'd1;  // Identity matrix
+      for (j = 0; j < 4; j++) begin
+        mat_b[i][j] = 8'(i*4 + j + 1);
+      end
+    end
+
+    // Expected = B (since A is identity)
+    for (i = 0; i < 4; i++) begin
+      for (j = 0; j < 4; j++) begin
+        expected[i][j] = mat_b[i][j];
+      end
+    end
+
+    // Execute
+    write_matrix_a(mat_a);
+    write_matrix_b(mat_b);
+    stream_matrices();
+    drain_pe_results();
+    write_results_to_bram_c();
+    verify_bram_c(expected);
+  endtask
+
+  // Test 3: Zero matrix
+  task automatic test_zero_matrix();
+    logic [T-1:0][T-1:0][W-1:0] mat_a, mat_b;
+    logic [T-1:0][T-1:0][ACCW-1:0] expected;
+
+    $display("\n=== Test 3: Zero Matrix ===");
+
+    mat_a = '0;
+    mat_b = '0;
+    expected = '0;
+
+    // A = all ones, B = zeros
+    for (int i = 0; i < T; i++) begin
+      for (int j = 0; j < T; j++) begin
+        mat_a[i][j] = 8'd1;
+      end
+    end
+
+    write_matrix_a(mat_a);
+    write_matrix_b(mat_b);
+    stream_matrices();
+    drain_pe_results();
+    write_results_to_bram_c();
+    verify_bram_c(expected);
+  endtask
+
+  // ============================================================
+  // Main Test Execution
+  // ============================================================
+  initial begin
+    $display("========================================");
+    $display("BRAM ? PE Array ? BRAM C Testbench");
+    $display("T = %0d, W = %0d, ACCW = %0d", T, W, ACCW);
+    $display("========================================");
+
+    // Initialize signals
+    bram_a_en = '0;
+    bram_a_addr = '0;
+    bram_a_din = '0;
+    bram_a_we = '0;
+    bram_a_be = '0;
+
+    bram_b_en = '0;
+    bram_b_addr = '0;
+    bram_b_din = '0;
+    bram_b_we = '0;
+    bram_b_be = '0;
+
+    bram_c_en = '0;
+    bram_c_addr = '0;
+    bram_c_din = '0;
+    bram_c_we = '0;
+    bram_c_be = '0;
+
+    pe_acc_clear_block = 0;
+    pe_drain_pulse = 0;
+
+    // Reset
+    rst_n = 0;
+    repeat(5) @(posedge clk);
+    rst_n = 1;
+    repeat(3) @(posedge clk);
+
+    // Run tests
+    test_2x2_matmul();
+    test_4x4_matmul();
+    test_zero_matrix();
+
+    $display("\n========================================");
+    $display("All Tests Complete");
+    $display("========================================\n");
+
+    repeat(10) @(posedge clk);
+    $finish;
+  end
+
+  // Timeout watchdog
+  initial begin
+    #500000;  // 500us timeout
+    $display("\nERROR: Testbench timeout!");
+    $finish;
+  end
+
+  // Waveform dumping
+  initial begin
+    $dumpfile("tb_bram_pe_bram.vcd");
+    $dumpvars(0, tb_bram_pe_bram);
+  end
+
+endmodule

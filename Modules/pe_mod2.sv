@@ -75,17 +75,17 @@ module pe #(
     end
   endgenerate
 
-  // ---- widen and accumulate ----
-  logic [ACCW-1:0] prod_ext, acc_q;
-  always_comb begin
-    if (SIGNED)
-      prod_ext = {{(ACCW-2*W){prod_for_add[2*W-1]}}, prod_for_add};
-    else
-      prod_ext = {{(ACCW-2*W){1'b0}},               prod_for_add};
-  end
+    // ---- widen and accumulate ----
+    logic [ACCW-1:0] prod_ext, acc_q;
+    always_comb begin
+      if (SIGNED)
+        prod_ext = {{(ACCW-2*W){prod_for_add[2*W-1]}}, prod_for_add};
+      else
+        prod_ext = {{(ACCW-2*W){1'b0}},               prod_for_add};
+    end
 
-  logic draining;
-  wire  do_mac = prod_v_for_add & !draining;
+    logic draining;
+    wire  do_mac = prod_v_for_add & !draining;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n)            acc_q <= '0;

@@ -14,7 +14,7 @@ module m10k_banks #(
         input logic [N_BANKS-1:0][$clog2(DEPTH_PER_BANK)-1:0] a_addr,
         input logic [N_BANKS-1:0][W-1:0] a_din,
         input logic [N_BANKS-1:0]a_we,
-  input  logic  [N_BANKS-1:0][(W/8>0?W/8:1)-1:0]            a_be,   // ignored if USE_BYTE_EN=0
+        input  logic  [N_BANKS-1:0][(W/8>0?W/8:1)-1:0]            a_be,   // ignored if USE_BYTE_EN=0
         output logic [N_BANKS-1:0][W-1:0] a_dout,
 
   //Port B

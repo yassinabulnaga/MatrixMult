@@ -87,19 +87,18 @@ module mm_fsm_controller #(
     S_IDLE         = 4'h0,
     S_INIT         = 4'h1,
     S_LOAD_A       = 4'h2,
-    S_WAIT_A       = 4'h3,  // NEW
-    S_LOAD_B       = 4'h4,
-    S_WAIT_B       = 4'h5,  // NEW
-    S_COMPUTE_INIT = 4'h6,  // was 4'h5
-    S_COMPUTE_FEED = 4'h7,  // was 4'h6
-    S_COMPUTE_WAIT = 4'h8,  // was 4'h7
-    S_DRAIN_INIT   = 4'h9,  // was 4'h8
-    S_DRAIN_WAIT   = 4'hA,  // was 4'h9
-    S_WRITE_INIT   = 4'hB,  // was 4'hA
-    S_WRITE_WAIT   = 4'hC,  // was 4'hB
-    S_NEXT_TILE    = 4'hD,  // was 4'hC
-    S_DONE         = 4'hE,  // was 4'hD
-    S_ERROR        = 4'hF   // was 4'hE
+    S_LOAD_B       = 4'h3,
+    S_WAIT_LOAD    = 4'h4,
+    S_COMPUTE_INIT = 4'h5,
+    S_COMPUTE_FEED = 4'h6,
+    S_COMPUTE_WAIT = 4'h7,
+    S_DRAIN_INIT   = 4'h8,
+    S_DRAIN_WAIT   = 4'h9,
+    S_WRITE_INIT   = 4'hA,
+    S_WRITE_WAIT   = 4'hB,
+    S_NEXT_TILE    = 4'hC,
+    S_DONE         = 4'hD,
+    S_ERROR        = 4'hE
   } state_t;
   
   state_t state, state_nxt;
@@ -136,13 +135,12 @@ always_ff @(posedge clk or negedge rst_n) begin
     loaderA_done_seen <= 1'b0;
     loaderB_done_seen <= 1'b0;
   end else begin
-    // Clear when starting a new load sequence (before LOAD_A state)
-    if (state == S_INIT || state == S_NEXT_TILE) begin
+    // Clear when starting a new load sequence
+    if (state == S_LOAD_A) begin
       loaderA_done_seen <= 1'b0;
       loaderB_done_seen <= 1'b0;
     end
-    
-    // Set flags when done signals are asserted
+
     if (loaderA_done)
       loaderA_done_seen <= 1'b1;
     if (loaderB_done)
@@ -245,27 +243,21 @@ end
         state_nxt = S_LOAD_A;
       end
       
-S_LOAD_A: begin
-        state_nxt = S_WAIT_A;
-      end
-      
-      S_WAIT_A: begin
-        if (loaderA_done_seen)
-          state_nxt = S_LOAD_B;
-        else if (!loaderA_busy && !loaderA_done_seen)
-          state_nxt = S_ERROR;
+      S_LOAD_A: begin
+        state_nxt = S_LOAD_B;
       end
       
       S_LOAD_B: begin
-        state_nxt = S_WAIT_B;
+        state_nxt = S_WAIT_LOAD;
       end
       
-      S_WAIT_B: begin
-        if (loaderB_done_seen)
-          state_nxt = S_COMPUTE_INIT;
-        else if (!loaderB_busy && !loaderB_done_seen)
-          state_nxt = S_ERROR;
-      end
+     S_WAIT_LOAD: begin
+  if (loaderA_done_seen && loaderB_done_seen)
+    state_nxt = S_COMPUTE_INIT;
+  else if (!loaderA_busy && !loaderB_busy &&
+           !loaderA_done_seen && !loaderB_done_seen)
+    state_nxt = S_ERROR;    
+end
 
       
       S_COMPUTE_INIT: begin
@@ -397,14 +389,12 @@ S_LOAD_A: begin
         busy = 1'b0;
       end
       
-S_LOAD_A: begin
+      S_LOAD_A: begin
         loaderA_start = 1'b1;
-        $display("[%0t] FSM: Starting LoaderA", $time);  // ADD THIS
       end
       
       S_LOAD_B: begin
         loaderB_start = 1'b1;
-        $display("[%0t] FSM: Starting LoaderB", $time);  // ADD THIS
       end
       
       S_COMPUTE_INIT: begin
