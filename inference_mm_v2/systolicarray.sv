@@ -47,10 +47,4 @@ module systolicarray
   end: PerRow
 
 
-
-
-
-
-
-
 endmodule

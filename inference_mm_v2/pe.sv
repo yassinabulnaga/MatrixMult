@@ -23,7 +23,7 @@ logic signed [7:0] a_q, b_q; // reg inputs
 
 always_comb begin 
 
-mult = $signed (in_a) * $signed(in_b) ;  //signed multiplication
+mult = $signed(in_a) * $signed(in_b) ;  //signed multiplication
 
 mac_d = (process) ? (mac_q + mult ): mac_q; //  Accumulate
 
