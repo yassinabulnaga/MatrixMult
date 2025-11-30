@@ -42,8 +42,8 @@ module pe #(
     end else begin
       a_valid_out <= a_valid;
       b_valid_out <= b_valid;
-	a_out <= a;  
-	b_out <= b; 
+a_out <= a;  
+b_out <= b; 
     end
   end
 

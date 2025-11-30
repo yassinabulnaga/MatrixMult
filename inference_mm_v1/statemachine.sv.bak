@@ -1,0 +1,128 @@
+// FSM Controller for Matrix Multiplication Accelerator
+// Sequences: Load A -> Load B -> Compute -> Store C
+
+module mm_fsm_ctrl #(
+    parameter int ADDR_W = 32,
+    parameter int LENGTH_W = 8
+)(
+    input  logic clk,
+    input  logic rst_n,
+    
+    // CPU interface
+    input  logic              cpu_start,
+    input  logic [ADDR_W-1:0] cpu_addr_a,
+    input  logic [ADDR_W-1:0] cpu_addr_b,
+    input  logic [ADDR_W-1:0] cpu_addr_c,
+    input  logic [LENGTH_W-1:0] cpu_len_a,
+    input  logic [LENGTH_W-1:0] cpu_len_b,
+    input  logic [LENGTH_W-1:0] cpu_len_c,
+    output logic              cpu_done,
+    output logic              cpu_busy,
+    
+    // DMA control
+    output logic              dma_start_load_a,
+    output logic              dma_start_load_b,
+    output logic              dma_start_store_c,
+    output logic [ADDR_W-1:0] dma_addr_a,
+    output logic [ADDR_W-1:0] dma_addr_b,
+    output logic [ADDR_W-1:0] dma_addr_c,
+    output logic [LENGTH_W-1:0] dma_len_a,
+    output logic [LENGTH_W-1:0] dma_len_b,
+    output logic [LENGTH_W-1:0] dma_len_c,
+    input  logic              dma_done_load_a,
+    input  logic              dma_done_load_b,
+    input  logic              dma_done_store_c,
+    
+    // PE Array control
+    output logic              pe_start,      // start compute
+    input  logic              pe_done        // compute done
+);
+
+    typedef enum logic [2:0] {
+        IDLE       = 3'd0,
+        LOAD_A     = 3'd1,
+        LOAD_B     = 3'd2,
+        COMPUTE    = 3'd3,
+        STORE_C    = 3'd4,
+        DONE       = 3'd5
+    } state_e;
+    
+    state_e state;
+    
+    // Sequential logic
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state <= IDLE;
+        end else begin
+            case (state)
+                IDLE: begin
+                    if (cpu_start) state <= LOAD_A;
+                end
+                
+                LOAD_A: begin
+                    if (dma_done_load_a) state <= LOAD_B;
+                end
+                
+                LOAD_B: begin
+                    if (dma_done_load_b) state <= COMPUTE;
+                end
+                
+                COMPUTE: begin
+                    if (pe_done) state <= STORE_C;
+                end
+                
+                STORE_C: begin
+                    if (dma_done_store_c) state <= DONE;
+                end
+                
+                DONE: begin
+                    state <= IDLE;
+                end
+                
+                default: state <= IDLE;
+            endcase
+        end
+    end
+    
+    // Output logic
+    always_comb begin
+        // Defaults
+        dma_start_load_a = 1'b0;
+        dma_start_load_b = 1'b0;
+        dma_start_store_c = 1'b0;
+        pe_start = 1'b0;
+        cpu_done = 1'b0;
+        cpu_busy = (state != IDLE);
+        
+        // Pass through addresses and lengths
+        dma_addr_a = cpu_addr_a;
+        dma_addr_b = cpu_addr_b;
+        dma_addr_c = cpu_addr_c;
+        dma_len_a = cpu_len_a;
+        dma_len_b = cpu_len_b;
+        dma_len_c = cpu_len_c;
+        
+        case (state)
+            LOAD_A: begin
+                dma_start_load_a = 1'b1;
+            end
+            
+            LOAD_B: begin
+                dma_start_load_b = 1'b1;
+            end
+            
+            COMPUTE: begin
+                pe_start = 1'b1;
+            end
+            
+            STORE_C: begin
+                dma_start_store_c = 1'b1;
+            end
+            
+            DONE: begin
+                cpu_done = 1'b1;
+            end
+        endcase
+    end
+
+endmodule

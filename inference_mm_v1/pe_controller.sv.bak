@@ -1,0 +1,35 @@
+The issue is that all banks are receiving the same data. This suggests the
+unpacked array assignments might not be synthesizing correctly.
+
+In pe_controller.sv STORE state, try this explicit version:
+
+CURRENT (May not synthesize correctly):
+```systemverilog
+STORE: begin
+    bram_c_en[row_cnt] = 1'b1;
+    bram_c_we[row_cnt] = 1'b1;
+    bram_c_addr[row_cnt] = col_cnt[BRAM_AW-1:0];
+    bram_c_wdata[row_cnt] = acc_mat[row_cnt][col_cnt];
+end
+```
+
+TRY THIS (Explicit loop):
+```systemverilog
+STORE: begin
+    for (int i = 0; i < T; i++) begin
+        if (i == row_cnt) begin
+            bram_c_en[i] = 1'b1;
+            bram_c_we[i] = 1'b1;
+            bram_c_addr[i] = col_cnt[BRAM_AW-1:0];
+            bram_c_wdata[i] = acc_mat[row_cnt][col_cnt];
+        end else begin
+            bram_c_en[i] = 1'b0;
+            bram_c_we[i] = 1'b0;
+            bram_c_addr[i] = '0;
+            bram_c_wdata[i] = '0;
+        end
+    end
+end
+```
+
+This explicitly sets ALL banks on every cycle, which should synthesize correctly.

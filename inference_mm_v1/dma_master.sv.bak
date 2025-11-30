@@ -1,7 +1,7 @@
 //Designed by Yassin Abulnaga
 
 
-module avalon_mm1 #(
+module avalon_mm #(
     parameter int BEAT_W   = 128, // Avalon Bit width  | 16 bytes
     parameter int ADDR_W   = 32,  // Avalon Address width 
     parameter int LENGTH_W = 8,   // Length inside beat
