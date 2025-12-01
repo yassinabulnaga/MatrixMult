@@ -1,0 +1,358 @@
+// Simple Testbench - No Controller FSM
+// Direct flow: BRAM A/B -> Registers -> Systolic Array -> BRAM C
+
+`timescale 1ns/1ps
+
+module tb_matmul_simple;
+
+    localparam int N = 16;
+    localparam int CLK_PERIOD = 10;
+    
+    // Clock and reset
+    logic clk;
+    logic rst;
+    
+    // BRAM A interface (16 banks)
+    logic [15:0][7:0] bram_a_addr;
+    logic [15:0][7:0] bram_a_rdata;
+    
+    // BRAM B interface (16 banks)
+    logic [15:0][7:0] bram_b_addr;
+    logic [15:0][7:0] bram_b_rdata;
+    
+    // BRAM C interface (16 banks)
+    logic [15:0][7:0]  bram_c_addr;
+    logic [15:0][31:0] bram_c_wdata;
+    logic [15:0]       bram_c_wren;
+    
+    // Registers for A and B matrices
+    logic [N-1:0][N-1:0][7:0] reg_a;
+    logic [N-1:0][N-1:0][7:0] reg_b;
+    
+    // Systolic array interface
+    logic                       systolic_valid_in;
+    logic [N-1:0][N-1:0][31:0]  systolic_out_c;
+    logic                       systolic_valid_out;
+    
+    // Clock generation
+    initial begin
+        clk = 0;
+        forever #(CLK_PERIOD/2) clk = ~clk;
+    end
+    
+    // Instantiate BRAM banks for Matrix A
+    genvar i;
+    generate
+        for (i = 0; i < 16; i++) begin : bram_a_banks
+            bram u_bram_a (
+                .address_a  (bram_a_addr[i]),
+                .address_b  (8'h00),
+                .clock      (clk),
+                .data_a     (8'h00),
+                .data_b     (8'h00),
+                .wren_a     (1'b0),
+                .wren_b     (1'b0),
+                .q_a        (bram_a_rdata[i]),
+                .q_b        ()
+            );
+        end
+    endgenerate
+    
+    // Instantiate BRAM banks for Matrix B
+    generate
+        for (i = 0; i < 16; i++) begin : bram_b_banks
+            bram u_bram_b (
+                .address_a  (bram_b_addr[i]),
+                .address_b  (8'h00),
+                .clock      (clk),
+                .data_a     (8'h00),
+                .data_b     (8'h00),
+                .wren_a     (1'b0),
+                .wren_b     (1'b0),
+                .q_a        (bram_b_rdata[i]),
+                .q_b        ()
+            );
+        end
+    endgenerate
+    
+    // Instantiate BRAM banks for output Matrix C (16 banks, row-wise storage)
+    generate
+        for (i = 0; i < 16; i++) begin : bram_c_banks
+            bramc u_bram_c (
+                .address_a  (bram_c_addr[i]),
+                .address_b  (8'h00),
+                .clock      (clk),
+                .data_a     (bram_c_wdata[i]),
+                .data_b     (32'h00000000),
+                .wren_a     (bram_c_wren[i]),
+                .wren_b     (1'b0),
+                .q_a        (),
+                .q_b        ()
+            );
+        end
+    endgenerate
+    
+    // Instantiate systolic array
+    topSystolicArray #(.N(N)) u_systolic (
+        .clk        (clk),
+        .rst        (rst),
+        .in_valid   (systolic_valid_in),
+        .in_a       (reg_a),
+        .in_b       (reg_b),
+        .out_c      (systolic_out_c),
+        .out_valid  (systolic_valid_out)
+    );
+    
+    // Initialize BRAMs with test data
+    initial begin
+        // Matrix A: Identity matrix
+        // Use constant indices for generate block access
+        bram_a_banks[0].u_bram_a.altsyncram_component.mem_data[0] = 8'd1;
+        bram_a_banks[1].u_bram_a.altsyncram_component.mem_data[1] = 8'd1;
+        bram_a_banks[2].u_bram_a.altsyncram_component.mem_data[2] = 8'd1;
+        bram_a_banks[3].u_bram_a.altsyncram_component.mem_data[3] = 8'd1;
+        bram_a_banks[4].u_bram_a.altsyncram_component.mem_data[4] = 8'd1;
+        bram_a_banks[5].u_bram_a.altsyncram_component.mem_data[5] = 8'd1;
+        bram_a_banks[6].u_bram_a.altsyncram_component.mem_data[6] = 8'd1;
+        bram_a_banks[7].u_bram_a.altsyncram_component.mem_data[7] = 8'd1;
+        bram_a_banks[8].u_bram_a.altsyncram_component.mem_data[8] = 8'd1;
+        bram_a_banks[9].u_bram_a.altsyncram_component.mem_data[9] = 8'd1;
+        bram_a_banks[10].u_bram_a.altsyncram_component.mem_data[10] = 8'd1;
+        bram_a_banks[11].u_bram_a.altsyncram_component.mem_data[11] = 8'd1;
+        bram_a_banks[12].u_bram_a.altsyncram_component.mem_data[12] = 8'd1;
+        bram_a_banks[13].u_bram_a.altsyncram_component.mem_data[13] = 8'd1;
+        bram_a_banks[14].u_bram_a.altsyncram_component.mem_data[14] = 8'd1;
+        bram_a_banks[15].u_bram_a.altsyncram_component.mem_data[15] = 8'd1;
+        // All other addresses default to 0
+        
+        // Matrix B: Column-order storage
+        // B[row][col] = row - col (signed int8 values)
+        // Manually initialize each bank with its column values
+        for (int row = 0; row < 16; row++) begin
+            bram_b_banks[0].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 0));
+            bram_b_banks[1].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 1));
+            bram_b_banks[2].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 2));
+            bram_b_banks[3].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 3));
+            bram_b_banks[4].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 4));
+            bram_b_banks[5].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 5));
+            bram_b_banks[6].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 6));
+            bram_b_banks[7].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 7));
+            bram_b_banks[8].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 8));
+            bram_b_banks[9].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 9));
+            bram_b_banks[10].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 10));
+            bram_b_banks[11].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 11));
+            bram_b_banks[12].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 12));
+            bram_b_banks[13].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 13));
+            bram_b_banks[14].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 14));
+            bram_b_banks[15].u_bram_b.altsyncram_component.mem_data[row] = 8'(signed'(row - 15));
+        end
+        
+        // Clear BRAM C (all 16 banks) - initialize to 0
+        // Note: Only first 16 addresses are used for 16x16 matrix
+    end
+    
+    // Main test sequence
+    initial begin
+        // Declare automatic variables at the top of the block
+        int errors;
+        int expected;
+        int actual;
+        int result;
+        
+        $display("=== Simple Matrix Multiplication Test ===");
+        $display("Matrix size: %0d x %0d\n", N, N);
+        
+        // Initialize signals
+        rst = 0;
+        systolic_valid_in = 0;
+        bram_a_addr = '0;
+        bram_b_addr = '0;
+        bram_c_addr = '0;
+        bram_c_wdata = '0;
+        bram_c_wren = '0;
+        
+        // Reset
+        #(CLK_PERIOD * 2);
+        rst = 1;
+        #(CLK_PERIOD * 2);
+        
+        $display("[%0t] Step 1: Loading matrices A and B from BRAM into registers", $time);
+        $display("           Matrix A: Identity matrix");
+        $display("           Matrix B: B[i][j] = i - j (signed int8)");
+        
+        // Load all rows from BRAM A and B into registers
+        for (int row = 0; row < N; row++) begin
+            // Both A and B use column-order storage
+            // Set address = row for all banks to get entire row
+            for (int bank = 0; bank < N; bank++) begin
+                bram_a_addr[bank] = {4'b0, 4'(row)};
+                bram_b_addr[bank] = {4'b0, 4'(row)};
+            end
+            
+            @(posedge clk);
+            #1; // Small delay for combinational read
+            
+            // Capture data into registers
+            // Both return data in same format: bank index = column
+            for (int col = 0; col < N; col++) begin
+                reg_a[row][col] = bram_a_rdata[col];
+                reg_b[row][col] = bram_b_rdata[col];
+            end
+        end
+        
+        $display("[%0t] Step 2: Starting systolic array computation", $time);
+        
+        // Start computation
+        @(posedge clk);
+        systolic_valid_in = 1;
+        @(posedge clk);
+        systolic_valid_in = 0;
+        
+        $display("[%0t] Step 3: Waiting for computation to complete...", $time);
+        
+        // Wait for valid output
+        @(posedge systolic_valid_out);
+        @(posedge clk);
+        
+        $display("[%0t] Step 4: Computation done! Writing results to BRAM C", $time);
+        $display("           (PE holds values stable since process=0)");
+        $display("           (Writing row-wise: all 16 columns per row in parallel)");
+        
+        // Write all results from systolic array output to BRAM C
+        // Each row written in parallel across 16 banks
+        for (int row = 0; row < N; row++) begin
+            // Set address and data for all 16 banks (one row at a time)
+            for (int col = 0; col < N; col++) begin
+                bram_c_addr[col] = {4'b0, 4'(row)};      // All banks get same row address
+                bram_c_wdata[col] = systolic_out_c[row][col];  // Each bank gets its column
+                bram_c_wren[col] = 1;
+            end
+            @(posedge clk);
+        end
+        
+        bram_c_wren = '0;
+        @(posedge clk);
+        
+        $display("[%0t] Step 5: Verifying results\n", $time);
+        
+        // Display results (first 4x4)
+        $display("Result Matrix C (first 4x4):");
+        $write("Row 0: ");
+        result = bram_c_banks[0].u_bram_c.altsyncram_component.mem_data[0];
+        $write("%8d ", result);
+        result = bram_c_banks[1].u_bram_c.altsyncram_component.mem_data[0];
+        $write("%8d ", result);
+        result = bram_c_banks[2].u_bram_c.altsyncram_component.mem_data[0];
+        $write("%8d ", result);
+        result = bram_c_banks[3].u_bram_c.altsyncram_component.mem_data[0];
+        $write("%8d\n", result);
+        
+        $write("Row 1: ");
+        result = bram_c_banks[0].u_bram_c.altsyncram_component.mem_data[1];
+        $write("%8d ", result);
+        result = bram_c_banks[1].u_bram_c.altsyncram_component.mem_data[1];
+        $write("%8d ", result);
+        result = bram_c_banks[2].u_bram_c.altsyncram_component.mem_data[1];
+        $write("%8d ", result);
+        result = bram_c_banks[3].u_bram_c.altsyncram_component.mem_data[1];
+        $write("%8d\n", result);
+        
+        $write("Row 2: ");
+        result = bram_c_banks[0].u_bram_c.altsyncram_component.mem_data[2];
+        $write("%8d ", result);
+        result = bram_c_banks[1].u_bram_c.altsyncram_component.mem_data[2];
+        $write("%8d ", result);
+        result = bram_c_banks[2].u_bram_c.altsyncram_component.mem_data[2];
+        $write("%8d ", result);
+        result = bram_c_banks[3].u_bram_c.altsyncram_component.mem_data[2];
+        $write("%8d\n", result);
+        
+        $write("Row 3: ");
+        result = bram_c_banks[0].u_bram_c.altsyncram_component.mem_data[3];
+        $write("%8d ", result);
+        result = bram_c_banks[1].u_bram_c.altsyncram_component.mem_data[3];
+        $write("%8d ", result);
+        result = bram_c_banks[2].u_bram_c.altsyncram_component.mem_data[3];
+        $write("%8d ", result);
+        result = bram_c_banks[3].u_bram_c.altsyncram_component.mem_data[3];
+        $write("%8d\n", result);
+        
+        // Verify (Identity * B = B, where B[row][col] = row - col)
+        $display("\nVerification (checking all 256 elements):");
+        errors = 0;
+        
+        // Manually unroll to use constant indices - check each bank (column)
+        for (int row = 0; row < N; row++) begin
+            expected = row - 0;  actual = $signed(bram_c_banks[0].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][0]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 1;  actual = $signed(bram_c_banks[1].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][1]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 2;  actual = $signed(bram_c_banks[2].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][2]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 3;  actual = $signed(bram_c_banks[3].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][3]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 4;  actual = $signed(bram_c_banks[4].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][4]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 5;  actual = $signed(bram_c_banks[5].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][5]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 6;  actual = $signed(bram_c_banks[6].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][6]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 7;  actual = $signed(bram_c_banks[7].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][7]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 8;  actual = $signed(bram_c_banks[8].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][8]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 9;  actual = $signed(bram_c_banks[9].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][9]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 10;  actual = $signed(bram_c_banks[10].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][10]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 11;  actual = $signed(bram_c_banks[11].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][11]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 12;  actual = $signed(bram_c_banks[12].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][12]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 13;  actual = $signed(bram_c_banks[13].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][13]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 14;  actual = $signed(bram_c_banks[14].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][14]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            expected = row - 15;  actual = $signed(bram_c_banks[15].u_bram_c.altsyncram_component.mem_data[row]);
+            if (actual != expected) begin $display("ERROR at [%0d][15]: Expected %0d, Got %0d", row, expected, actual); errors++; end
+            
+            if (errors >= 10) begin
+                $display("... (stopping after 10 errors)");
+                break;
+            end
+        end
+        
+        if (errors == 0) begin
+            $display("? All %0d results correct!", N*N);
+        end else begin
+            $display("? Found %0d errors", errors);
+        end
+        
+        #(CLK_PERIOD * 10);
+        $display("\n=== Test Complete ===");
+        $finish;
+    end
+    
+    // Timeout
+    initial begin
+        #(CLK_PERIOD * 10000);
+        $display("ERROR: Timeout!");
+        $finish;
+    end
+
+endmodule

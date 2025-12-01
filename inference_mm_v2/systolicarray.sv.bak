@@ -19,12 +19,12 @@ module systolicarray
    logic [N:0][N-1:0][7:0] colInterConnect; // N + 1 column interconnect wires 
 
   // Attach Matrix Inputs to First Col/Row PE input 
-  for (genvar i = 0; i < N; i++ ) begin: gen_boundary
+  for (genvar i = 0; i < N; i++ ) begin: interconnect
 
   assign rowInterConnect [i][0] = in_row [i][0]; //First Col PE's
   assign colInterConnect [0][i] = in_col [i][0]; //First Row PE's
 
-  end:gen_boundary
+  end:interconnect
 
   for (genvar i = 0; i < N; i++) begin: PerRow
     for (genvar j = 0; j < N; j++) begin: PerCol
