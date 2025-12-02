@@ -1,0 +1,16 @@
+-- Matrix B initialization file
+-- 16x16 matrix stored sequentially (row-major order)
+-- Each value is 8-bit signed integer
+
+DEPTH = 256;
+WIDTH = 8;
+ADDRESS_RADIX = DEC;
+DATA_RADIX = DEC;
+
+CONTENT
+BEGIN
+
+-- Simple test pattern: all 1s for easy verification
+[0..255] : 1;
+
+END;
