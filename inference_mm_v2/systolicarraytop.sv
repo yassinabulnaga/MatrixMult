@@ -1,5 +1,3 @@
-
-
 module topSystolicArray
  #(parameter int N = 16)(
 
@@ -65,7 +63,10 @@ module topSystolicArray
     logic [N-1:0][N-1:0][7:0] invertedRowElements;
     logic [N-1:0][N-1:0][7:0] invertedColElements;
 
-    for (genvar i = 0; i < N ; i++) begin: perRowCol
+    genvar i, j_row, j_col;
+    
+    generate
+    for (i = 0; i < N ; i = i + 1) begin: perRowCol
 
     always_ff @(posedge clk or negedge rst) begin
         if (!rst) begin
@@ -90,10 +91,10 @@ module topSystolicArray
     end
 
     //Invert elements in each row
-    for (genvar j = 0; j < N ; j++) begin: invertRowElements
-    assign invertedRowElements[i][j] = in_a[i][N-1-j];
+    for (j_row = 0; j_row < N ; j_row = j_row + 1) begin: invertRowElements
+    assign invertedRowElements[i][j_row] = in_a[i][N-1-j_row];
 
-    end: invertRowElements
+    end
 
     always_ff @(posedge clk or negedge rst) begin
         if (!rst) begin
@@ -118,12 +119,13 @@ module topSystolicArray
     end
 
     // Invert the positions of the elements in each col to form the col matrix.
-    for (genvar j = 0; j < N; j++) begin: perColElement
-    assign  invertedColElements[i][j] = in_b[N-j-1][i];
+    for (j_col = 0; j_col < N; j_col = j_col + 1) begin: perColElement
+    assign  invertedColElements[i][j_col] = in_b[N-j_col-1][i];
     
-    end: perColElement
+    end
 
-    end : perRowCol
+    end
+    endgenerate
 
     systolicarray #(.N(N)) u_systolicarray (
         .clk        (clk),

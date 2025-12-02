@@ -1,5 +1,5 @@
 //Designed by Yassin Abulnaga
-//Performs 8-bit MAC
+//Performs 8-bit MAC - optimized to use logic instead of DSP blocks
 module pe   (
 
     input logic                clk,
@@ -15,7 +15,8 @@ module pe   (
     output logic signed [31:0] out
 ); 
 
-logic signed [31:0] mult; //multiplication  output
+// Force multiplication to use logic elements instead of DSP blocks
+(* multstyle = "logic" *) logic signed [31:0] mult;
 
 logic signed [31:0] mac_d, mac_q; // mac registers
 
@@ -23,9 +24,9 @@ logic signed [7:0] a_q, b_q; // reg inputs
 
 always_comb begin 
 
-mult = $signed(in_a) * $signed(in_b) ;  //signed multiplication
+mult = $signed(in_a) * $signed(in_b);  // Multiplication in logic
 
-mac_d = (process) ? (mac_q + mult ): mac_q; //  Accumulate
+mac_d = (process) ? (mac_q + mult) : mac_q;  // Accumulate
 
 //Forwarding Logic 
 out   = mac_q; 
