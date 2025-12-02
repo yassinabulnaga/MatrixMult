@@ -12,13 +12,6 @@ module topSystolicArray
     output logic                         out_valid
 
  );
- 
-(* keep = 1 *) logic in_valid_keep;
-(* keep = 1 *) logic out_valid_keep;
-
-assign in_valid_keep  = in_valid;
-assign out_valid_keep = out_valid;
-
 
     // 3N - 2 cycles from start of processing until all outputs valid
     localparam int unsigned MULT_CYCLES = 3*N-2;
@@ -46,7 +39,7 @@ assign out_valid_keep = out_valid;
 
         if(in_valid == 1) begin
             process_d = 1'b1;
-        end else if (counter_q == MULT_CYCLES_W'(MULT_CYCLES)) begin
+        end else if (counter_q == MULT_CYCLES_W'(MULT_CYCLES + 1)) begin
             process_d = 1'b0;
         end
 
