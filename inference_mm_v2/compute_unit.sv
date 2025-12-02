@@ -7,6 +7,10 @@ module compute_unit #(
     output logic       done
 );
 
+    // Address parameters
+    localparam int ADDR_MAX = N*N;              // 256
+    localparam int ADDR_W = $clog2(ADDR_MAX);   // 8
+
     // FSM states
     typedef enum logic [1:0] {
         IDLE,
@@ -17,8 +21,8 @@ module compute_unit #(
     
     state_t state_q, state_d;
     
-    // Counter for loading and storing
-    logic [7:0] addr_cnt_d, addr_cnt_q;
+    // Counter - needs extra bit to count to 256
+    logic [ADDR_W:0] addr_cnt_d, addr_cnt_q;  // 9 bits to handle 0-256
     
     // BRAM A signals (8-bit input data)
     logic [7:0] bram_a_addr_a, bram_a_addr_b;
@@ -37,6 +41,10 @@ module compute_unit #(
     logic [31:0] bram_c_data_a, bram_c_data_b;
     logic        bram_c_wren_a, bram_c_wren_b;
     logic [31:0] bram_c_q_a, bram_c_q_b;
+    
+    // Delayed address registers to track which address produced current q values
+    logic [7:0] bram_a_addr_a_q, bram_a_addr_b_q;
+    logic [7:0] bram_b_addr_a_q, bram_b_addr_b_q;
     
     // Register matrices for A and B
     logic [N-1:0][N-1:0][7:0] reg_matrix_a_d, reg_matrix_a_q;
@@ -102,18 +110,48 @@ module compute_unit #(
             addr_cnt_q     <= '0;
             reg_matrix_a_q <= '0;
             reg_matrix_b_q <= '0;
+            bram_a_addr_a_q <= '0;
+            bram_a_addr_b_q <= '0;
+            bram_b_addr_a_q <= '0;
+            bram_b_addr_b_q <= '0;
         end else begin
             state_q        <= state_d;
             addr_cnt_q     <= addr_cnt_d;
             reg_matrix_a_q <= reg_matrix_a_d;
             reg_matrix_b_q <= reg_matrix_b_d;
+            // Track addresses for BRAM read latency
+            bram_a_addr_a_q <= bram_a_addr_a;
+            bram_a_addr_b_q <= bram_a_addr_b;
+            bram_b_addr_a_q <= bram_b_addr_a;
+            bram_b_addr_b_q <= bram_b_addr_b;
         end
     end
     
-    // FSM and control logic
-    logic [7:0] addr_a_prev, addr_b_prev, addr_c_a, addr_c_b;
-    logic [3:0] row_a, col_a, row_b, col_b, row_c_a, col_c_a, row_c_b, col_c_b;
+    // Decode coordinates from delayed addresses (these match current q values)
+    logic [3:0] row_a_a, col_a_a, row_a_b, col_a_b;
+    logic [3:0] row_b_a, col_b_a, row_b_b, col_b_b;
+    logic [3:0] row_c_a, col_c_a, row_c_b, col_c_b;
     
+    always_comb begin
+        // For loading (delayed addresses match current q outputs)
+        row_a_a = bram_a_addr_a_q[7:4];
+        col_a_a = bram_a_addr_a_q[3:0];
+        row_a_b = bram_a_addr_b_q[7:4];
+        col_a_b = bram_a_addr_b_q[3:0];
+        
+        row_b_a = bram_b_addr_a_q[7:4];
+        col_b_a = bram_b_addr_a_q[3:0];
+        row_b_b = bram_b_addr_b_q[7:4];
+        col_b_b = bram_b_addr_b_q[3:0];
+        
+        // For storing (current counter)
+        row_c_a = addr_cnt_q[7:4];
+        col_c_a = addr_cnt_q[3:0];
+        row_c_b = (addr_cnt_q + 1)[7:4];
+        col_c_b = (addr_cnt_q + 1)[3:0];
+    end
+    
+    // FSM and control logic
     always_comb begin
         // Default assignments
         state_d        = state_q;
@@ -121,31 +159,25 @@ module compute_unit #(
         reg_matrix_a_d = reg_matrix_a_q;
         reg_matrix_b_d = reg_matrix_b_q;
         
-        // BRAM control defaults
-        bram_a_addr_a  = addr_cnt_q;
-        bram_a_addr_b  = addr_cnt_q + 1;
+        // BRAM A control defaults
+        bram_a_addr_a  = addr_cnt_q[7:0];
+        bram_a_addr_b  = addr_cnt_q[7:0] + 1;
         bram_a_data_a  = '0;
         bram_a_data_b  = '0;
         bram_a_wren_a  = 1'b0;
         bram_a_wren_b  = 1'b0;
         
-        bram_b_addr_a  = addr_cnt_q;
-        bram_b_addr_b  = addr_cnt_q + 1;
+        // BRAM B control defaults
+        bram_b_addr_a  = addr_cnt_q[7:0];
+        bram_b_addr_b  = addr_cnt_q[7:0] + 1;
         bram_b_data_a  = '0;
         bram_b_data_b  = '0;
         bram_b_wren_a  = 1'b0;
         bram_b_wren_b  = 1'b0;
         
-        // Parse addresses for BRAM C indexing
-        addr_c_a   = addr_cnt_q;
-        addr_c_b   = addr_cnt_q + 1;
-        row_c_a    = addr_c_a[7:4];
-        col_c_a    = addr_c_a[3:0];
-        row_c_b    = addr_c_b[7:4];
-        col_c_b    = addr_c_b[3:0];
-        
-        bram_c_addr_a  = addr_cnt_q;
-        bram_c_addr_b  = addr_cnt_q + 1;
+        // BRAM C control defaults
+        bram_c_addr_a  = addr_cnt_q[7:0];
+        bram_c_addr_b  = addr_cnt_q[7:0] + 1;
         bram_c_data_a  = sa_out_c[row_c_a][col_c_a];
         bram_c_data_b  = sa_out_c[row_c_b][col_c_b];
         bram_c_wren_a  = 1'b0;
@@ -153,14 +185,6 @@ module compute_unit #(
         
         sa_in_valid    = 1'b0;
         done           = 1'b0;
-        
-        // Address parsing for matrix loading
-        addr_a_prev = addr_cnt_q - 1;
-        addr_b_prev = addr_cnt_q;
-        row_a = addr_a_prev[7:4];
-        col_a = addr_a_prev[3:0];
-        row_b = addr_b_prev[7:4];
-        col_b = addr_b_prev[3:0];
         
         case (state_q)
             IDLE: begin
@@ -171,31 +195,28 @@ module compute_unit #(
             end
             
             LOAD_MATRICES: begin
-                // Load matrices from BRAM using dual-port reads
-                // BRAM stores row-major: addr=row*16+col maps to matrix[row][col]
-                // addr[7:4] = row, addr[3:0] = col
-                if (addr_cnt_q < N*N) begin
-                    addr_cnt_d = addr_cnt_q + 2;
-                end else if (addr_cnt_q >= N*N && addr_cnt_q < N*N + 2) begin
-                    // Wait one more cycle to capture last data
-                    addr_cnt_d = addr_cnt_q + 1;
+                // Advance addresses while we still have elements to read
+                if (addr_cnt_q < ADDR_MAX - 1) begin
+                    addr_cnt_d = addr_cnt_q + 2;  // Two elements per cycle
                 end else begin
-                    // All data captured, transition to compute
-                    addr_cnt_d = '0;
+                    // Stop incrementing, do one more cycle to capture last data
+                    addr_cnt_d = addr_cnt_q;
                     state_d = COMPUTE;
                 end
                 
-                // Capture data (with 1-cycle BRAM read latency)
-                if (addr_cnt_q >= 1 && addr_cnt_q <= N*N + 1) begin
-                    if (addr_a_prev < N*N) begin
-                        reg_matrix_a_d[row_a][col_a] = bram_a_q_a;
-                        reg_matrix_b_d[row_a][col_a] = bram_b_q_a;
-                    end
-                    
-                    if (addr_b_prev < N*N) begin
-                        reg_matrix_a_d[row_b][col_b] = bram_a_q_b;
-                        reg_matrix_b_d[row_b][col_b] = bram_b_q_b;
-                    end
+                // Capture BRAM data into matrices (delayed addresses match current q values)
+                if (bram_a_addr_a_q < ADDR_MAX) begin
+                    reg_matrix_a_d[row_a_a][col_a_a] = bram_a_q_a;
+                end
+                if (bram_a_addr_b_q < ADDR_MAX) begin
+                    reg_matrix_a_d[row_a_b][col_a_b] = bram_a_q_b;
+                end
+                
+                if (bram_b_addr_a_q < ADDR_MAX) begin
+                    reg_matrix_b_d[row_b_a][col_b_a] = bram_b_q_a;
+                end
+                if (bram_b_addr_b_q < ADDR_MAX) begin
+                    reg_matrix_b_d[row_b_b][col_b_b] = bram_b_q_b;
                 end
             end
             
@@ -209,14 +230,13 @@ module compute_unit #(
                 // Wait for computation to complete
                 if (sa_out_valid) begin
                     addr_cnt_d = '0;
-                    // Start writing results to BRAM C
                 end
                 
                 // Write results to BRAM C using dual-port writes
                 if (sa_out_valid || addr_cnt_q > 0) begin
-                    if (addr_cnt_q < N*N) begin
+                    if (addr_cnt_q < ADDR_MAX) begin
                         bram_c_wren_a = 1'b1;
-                        if (addr_cnt_q + 1 < N*N) begin
+                        if (addr_cnt_q + 1 < ADDR_MAX) begin
                             bram_c_wren_b = 1'b1;
                         end
                         addr_cnt_d = addr_cnt_q + 2;
